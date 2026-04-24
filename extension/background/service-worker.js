@@ -8,9 +8,9 @@
 // 4. Notificar o content script quando o status mudar
 // ============================================================
 
-const API_BASE = 'http://localhost:3000/api/v1';
-// Para desenvolvimento local, troque por 'http://localhost:3000/api/v1'
-// e ajuste host_permissions no manifest.
+// API_BASE vem de ../config.js — arquivo é reescrito pelo build.mjs
+// com os valores de prod quando a gente empacota pra Chrome Web Store.
+import { API_BASE } from '../config.js';
 
 const STORAGE_KEYS = {
   KEY_VALUE: 'zf_key',

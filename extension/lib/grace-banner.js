@@ -27,9 +27,10 @@
 
 export const LICENSE_STATE_KEY = 'zf_license_state';
 
-// TODO (Sprint 7): trocar por prod em build time.
-// Por ora hardcoded em localhost:3001 (mesmo PANEL_BASE_URL do backend).
-export const PANEL_URL = 'http://localhost:3001';
+// Sprint 7 — PANEL_URL vem de ../config.js (build-replaced).
+// Re-exporta pra manter a API pública deste módulo estável.
+import { PANEL_URL as _PANEL_URL } from '../config.js';
+export const PANEL_URL = _PANEL_URL;
 
 const BLOCKING_CODES = new Set([
   'EXPIRED',
