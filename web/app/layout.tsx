@@ -4,8 +4,12 @@ import { AuthProvider } from '@/components/AuthProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Zapfire — painel',
-  description: 'Painel do assinante Zapfire',
+  title: {
+    default: 'Zapfire — painel',
+    template: '%s · Zapfire',
+  },
+  description: 'Gerencie sua assinatura, chave e dispositivos do Zapfire.',
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({
