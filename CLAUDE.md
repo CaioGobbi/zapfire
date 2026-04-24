@@ -249,7 +249,7 @@ window.postMessage({
 - **Áudio invisível como PTT**: conversão MP3/WAV → OGG Opus real (via opus-media-recorder) no upload no manager, salva como OGG no IndexedDB; envio usa `isPtt: true` → WA renderiza com waveform detalhado no remetente E destinatário
 - **Paralelismo real**: múltiplos funis pra conversas diferentes enviando ao mesmo tempo, sem abrir chats, sem UI visível mudar
 
-### Sprint 4 — ETAPAs 1–6 concluídas (ciclo comercial + painel)
+### Sprint 4 — COMPLETO (ciclo comercial + painel + banners + gate)
 
 **Backend (ETAPAs 1–5):**
 - **Schema**: 2 tabelas novas (`email_tokens`, `refresh_tokens`), novos campos de integração Kirvano e grace period, 2 planos comerciais (`monthly_v1`, `annual_v1`). Migration `sprint4_auth_payments` aplicada
@@ -276,9 +276,15 @@ window.postMessage({
   - API wrapper mandava `Content-Type: application/json` mesmo sem body → Fastify rejeitava `POST /refresh` com `FST_ERR_CTP_EMPTY_JSON_BODY` → só seta CT quando há body
   - Cookie `SameSite=Strict` bloqueando bootstrap → `Lax`
 
-**Pendente do Sprint 4:**
-- **ETAPA 7** — banners de grace period dentro da **extensão** (sidebar, popup) + gate de envio client-side (aprovado como opção 2)
-- **ETAPA 8** — `docs/kirvano-webhook.md` ✅ criado; `docs/email-templates.md` pendente
+**Extensão (ETAPA 7):**
+- **`extension/lib/grace-banner.js`** (novo) — helpers compartilhados: `readLicenseState`, `subscribeLicenseState` (observa `chrome.storage.onChanged`), `canSend`, `isBlocked`, `isInGrace`, `renderBannerInto`. Injeta CSS do banner 1× no documento. Exporta constante `PANEL_URL` (TODO Sprint 7: templating por build)
+- **service-worker** — após cada `validateKey` (sucesso OU erro), salva `chrome.storage.local.zf_license_state = { code, warning, graceEndsAt, daysLeft, phone, lastCheckedAt }`. Logout limpa tudo. Zero mudança na lógica de bind/device
+- **sidebar/quickbar/popup** — cada contexto faz `subscribeLicenseState(cb)`, repinta banner + desabilita botões de envio quando `isBlocked`. Gate de 1 linha no topo dos handlers de send/run. Sidebar tem o banner completo (grace amber + blocked red); quickbar só mostra banner compacto em estado bloqueado (espaço apertado); popup tem banner dentro do card de status + badge reativo
+- **content.js** — único ponto tocado: estados bloqueados "recuperáveis pelo painel" (`EXPIRED`, `WRONG_PHONE`, `BLOCKED`) agora montam a sidebar mesmo assim, pro banner fazer o seu trabalho. `INVALID_KEY`/`NETWORK_ERROR` seguem com banner fixo de topo
+
+**Docs (ETAPA 8):**
+- `docs/kirvano-webhook.md` — schema + payloads de exemplo + how-to-test local (curl + ngrok) + idempotência
+- `docs/email-templates.md` — 5 templates (boas-vindas, renovação, cancelamento, chargeback/refund, magic link): variáveis, estrutura, observações comportamentais, modo mock vs real, débito técnico
 
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
@@ -333,10 +339,9 @@ window.postMessage({
 
 ## Próximos Sprints
 
-- **Sprint 4 — pendente:** ETAPA 7 (banners de grace na extensão + gate de envio client-side) + ETAPA 8 final (docs/email-templates.md)
 - **Sprint 5:** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
-- **Sprint 6:** Backoffice admin (ver chaves, bindar/desbindar, ver logs, promover usuário, liberar novo reset-bind pra clientes que já usaram o do mês)
-- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão, deploy Render pro backend + Vercel pro painel, publicação Chrome Web Store
+- **Sprint 6:** Backoffice admin (ver chaves, bindar/desbindar, ver logs, promover usuário, liberar novo reset-bind pra clientes que já usaram o do mês). Preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `kirvanoParser.js` com IDs reais da Kirvano. Consumir webhook de bounce do Resend pra marcar emails não entregues
+- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão. Substituir `PANEL_URL` hardcoded em `grace-banner.js` por templating em build. Deploy Render pro backend + Vercel pro painel. Publicação Chrome Web Store
 
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
