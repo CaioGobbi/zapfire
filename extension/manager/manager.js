@@ -11,6 +11,7 @@
 // ============================================================
 
 import * as storage from '../lib/storage.js';
+import { PANEL_URL } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1117,6 +1118,11 @@ function init() {
   // Export/Import
   $('btn-export').addEventListener('click', doExport);
   $('btn-import').addEventListener('click', () => $('import-file').click());
+
+  // Abrir painel do assinante em nova aba (URL vem de config.js — build-replaced)
+  $('btn-panel').addEventListener('click', () => {
+    window.open(`${PANEL_URL}/dashboard`, '_blank', 'noopener,noreferrer');
+  });
   $('import-file').addEventListener('change', (e) => {
     if (e.target.files[0]) doImport(e.target.files[0]);
   });
