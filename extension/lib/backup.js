@@ -390,6 +390,19 @@ export async function importBackup(input, options = {}) {
   // quando conflictMode='rename' encontra colisão).
   const idMap = new Map();
 
+  // -------- Preservação de ordem --------
+  // listItems / listFunnels ordenam por createdAt DESC. Pra que os
+  // items apareçam na MESMA ordem do backup do ZapVoice, atribuímos
+  // createdAt decrescente conforme processamos: o primeiro item do
+  // backup recebe baseTime (mais novo), o segundo baseTime-1, etc.
+  // Sem isso, todos os items pegam ~now() do storage (diferindo em
+  // 0-1ms) e a ordem fica indeterminada.
+  const importBaseTime = Date.now();
+  let orderTickItem = 0;
+  let orderTickFunnel = 0;
+  const nextItemCreatedAt = () => importBaseTime - (orderTickItem++);
+  const nextFunnelCreatedAt = () => importBaseTime - (orderTickFunnel++);
+
   // -------- Áudios --------
   for (const meta of data.audios || []) {
     try {
@@ -408,6 +421,7 @@ export async function importBackup(input, options = {}) {
         content: blob,
         mimeType: blob.type || 'audio/ogg',
         size: blob.size,
+        createdAt: nextItemCreatedAt(),
         isPtt: typeof obj.isPtt === 'boolean' ? obj.isPtt : (meta.isPtt ?? true),
         asViewOnce: meta.asViewOnce ?? false,
         isFavorite: meta.isFavorite ?? false,
@@ -443,6 +457,7 @@ export async function importBackup(input, options = {}) {
         content: blob,
         mimeType: blob.type || (internalType === 'video' ? 'video/mp4' : 'image/jpeg'),
         size: blob.size,
+        createdAt: nextItemCreatedAt(),
         caption: typeof obj.caption === 'string' ? obj.caption : '',
         asViewOnce: meta.asViewOnce ?? false,
         isFavorite: meta.isFavorite ?? false,
@@ -479,6 +494,7 @@ export async function importBackup(input, options = {}) {
         content: blob,
         mimeType: blob.type || 'application/octet-stream',
         size: blob.size,
+        createdAt: nextItemCreatedAt(),
         fileName: obj.fileName || meta.name || 'arquivo',
         isFavorite: meta.isFavorite ?? false,
         mentionUsers: meta.mentionUsers || 'none',
@@ -510,6 +526,7 @@ export async function importBackup(input, options = {}) {
         title: meta.name || 'Mensagem',
         content: text,
         size: text.length,
+        createdAt: nextItemCreatedAt(),
         isFavorite: meta.isFavorite ?? false,
         mentionUsers: meta.mentionUsers || 'none',
       };
@@ -549,6 +566,7 @@ export async function importBackup(input, options = {}) {
         name: f.name || 'Funil',
         steps,
         isFavorite: f.isFavorite ?? false,
+        createdAt: nextFunnelCreatedAt(),
       };
       const wrote = await writeFunnelWithConflict(funnel, conflictMode, idMap, f.id);
       if (wrote) report.imported.funnels++;
