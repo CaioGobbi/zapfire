@@ -286,6 +286,37 @@ window.postMessage({
 - `docs/kirvano-webhook.md` — schema + payloads de exemplo + how-to-test local (curl + ngrok) + idempotência
 - `docs/email-templates.md` — 5 templates (boas-vindas, renovação, cancelamento, chargeback/refund, magic link): variáveis, estrutura, observações comportamentais, modo mock vs real, débito técnico
 
+### Sprint 6 — COMPLETO (backoffice admin + Resend bounce tracking)
+
+**Backend (ETAPA 1–3):**
+- `middleware/requireAdmin.js` — preHandler que extende `authGuard`, re-checa `role=ADMIN` no banco (defesa em profundidade contra token stale)
+- `routes/admin.js` com prefixo `/api/v1/admin` (tudo gated por `[authGuard, requireAdmin]`):
+  - **Leitura**: `GET /stats` (users/keys/subs counts, inGrace, MRR), `GET /users` (paginado + search), `GET /users/:id` (detalhe completo com keys+devices+subs+payments+validations+audit), `GET /keys` (lista global)
+  - **Ações**: `POST /keys/:id/reset-bind` (força, bypassa 1×/mês), `/unlock-reset` (zera counter), `/block` + `/unblock`, `POST /subscriptions/:id/extend` + `/set-status`, `POST /users/:id/promote`
+  - Todas registram audit_logs com `userId` do admin + metadata completo (valores antes/depois)
+- Seed atualizado: admin recebe `passwordSetAt` + `emailVerified` na criação, evita `PASSWORD_NOT_SET` no login direto
+
+**Painel admin (ETAPA 4) — route group `/web/app/(admin)/`:**
+- Layout próprio com sidebar separada (Dashboard/Usuários/Chaves/Emails), badge "ADMIN" abaixo do logo, link pra voltar pro painel do assinante
+- Gate duplo: (1) auth via bootstrapSession, (2) `user.role === 'ADMIN'` (senão tela "Acesso restrito")
+- Pages:
+  - `/admin` — 6 StatCards (users total/active, keys total/active/blocked, subs active/canceled/expired, in grace, MRR aproximado, revenue 30d + signups 7d)
+  - `/admin/usuarios` — lista paginada por cursor com search email/nome
+  - `/admin/usuarios/:id` — header com role badge + flags + botão "Mudar role". Tabs (Chaves, Assinaturas, Pagamentos, Validações, Audit). Cada KeyCard tem botões pra reset-bind/unlock-reset/block/unblock. SubCard tem extend + set-status
+  - `/admin/chaves` — lista global com search por prefixo hex/email/label + filtro de status
+  - `/admin/emails` — filtros por deliveryStatus (Todos/Bounces/Spam/Falhou/Entregues), tabela clickable
+- Link "Backoffice admin" adicionado ao rodapé da sidebar do assinante, visível só quando `user.role === 'ADMIN'`
+
+**ETAPA 5 — Kirvano offer_id (visibilidade read-only):**
+- `kirvanoParser.getOfferMappings()` exporta as Sets atuais
+- `GET /api/v1/admin/kirvano-mapping` mostra mappings + planos (sem edição — edit ainda requer redeploy)
+
+**ETAPA 6 — Resend bounce tracking:**
+- **Schema**: `EmailToken` ganha `resendEmailId`, `deliveryStatus`, `deliveryUpdatedAt`. Migration `sprint6_email_tracking` aplicada
+- **Send side**: `kirvanoService` (welcome email) e `account.js` (magic link) capturam o `id` retornado pela Resend e persistem em `EmailToken.resendEmailId` com `deliveryStatus='sent'`
+- **Webhook**: `POST /api/v1/webhooks/resend` com auth header `X-Zapfire-Resend-Token` (env `RESEND_WEBHOOK_TOKEN`). Mapeia eventos (`email.sent|delivered|bounced|complained|failed`) → deliveryStatus, ignora opened/clicked. Sempre 200 após auth (anti retry loop). Em bounce/complained/failed, cria audit log
+- **Admin UI**: página `/admin/emails` lista tudo com filtros, banner alerta quando tem bounces, link do destinatário navega pro user
+
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
 ### Sprint 1-2
@@ -339,9 +370,8 @@ window.postMessage({
 
 ## Próximos Sprints
 
-- **Sprint 5:** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
-- **Sprint 6:** Backoffice admin (ver chaves, bindar/desbindar, ver logs, promover usuário, liberar novo reset-bind pra clientes que já usaram o do mês). Preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `kirvanoParser.js` com IDs reais da Kirvano. Consumir webhook de bounce do Resend pra marcar emails não entregues
-- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão. Substituir `PANEL_URL` hardcoded em `grace-banner.js` por templating em build. Deploy Render pro backend + Vercel pro painel. Publicação Chrome Web Store
+- **Sprint 5 (pulado pra frente — fazer quando necessário):** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
+- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão. Substituir `PANEL_URL` hardcoded em `grace-banner.js` por templating em build. Deploy Render pro backend + Vercel pro painel. Publicação Chrome Web Store. Migrar webhook Resend de token header pra assinatura svix (padrão oficial). Preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `kirvanoParser.js` com IDs reais da Kirvano
 
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
