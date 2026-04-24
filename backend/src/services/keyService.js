@@ -189,7 +189,19 @@ export async function validateKey({ keyValue, phone, deviceId, ipAddress, userAg
     result: 'SUCCESS',
   });
 
-  return {
+  // ---------- 7. Período de graça (Sprint 4) ----------
+  // Se a assinatura venceu há até 3 dias, devolve sucesso com warning
+  // "GRACE_PERIOD" — a extensão mostra banner, mas continua funcionando.
+  // Se passou dos 3 dias, marca EXPIRED no banco e devolve EXPIRED.
+  //
+  // IMPORTANTE: esse check é APÓS o success (não antes) — a gente não
+  // muda a lógica de bind/device, só adiciona um warning no retorno.
+  const GRACE_DAYS = 3;
+  const nowMs = Date.now();
+  const periodEndMs = sub.currentPeriodEnd.getTime();
+  const graceEndMs = periodEndMs + GRACE_DAYS * 86400000;
+
+  const baseResult = {
     ok: true,
     code: 'SUCCESS',
     data: {
@@ -204,6 +216,39 @@ export async function validateKey({ keyValue, phone, deviceId, ipAddress, userAg
       },
     },
   };
+
+  if (nowMs > graceEndMs) {
+    // Passou do grace — expira na hora (lazy) e nega
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: { status: 'EXPIRED' },
+    });
+    await logValidation({
+      accessKeyId: key.id,
+      keyValueTry: keyValue,
+      phoneTry: normalizedPhone,
+      deviceId,
+      ipAddress,
+      userAgent,
+      result: 'EXPIRED',
+      reason: 'Passou do período de graça (3 dias após currentPeriodEnd)',
+    });
+    return {
+      ok: false,
+      code: 'EXPIRED',
+      message: 'Assinatura expirada. Renove seu plano.',
+    };
+  }
+
+  if (nowMs > periodEndMs) {
+    // Dentro do grace — warning + daysLeft
+    const daysLeft = Math.ceil((graceEndMs - nowMs) / 86400000);
+    baseResult.warning = 'GRACE_PERIOD';
+    baseResult.data.graceEndsAt = new Date(graceEndMs).toISOString();
+    baseResult.data.daysLeft = daysLeft;
+  }
+
+  return baseResult;
 }
 
 // ------------------------------------------------------------
@@ -251,4 +296,92 @@ export async function resetKeyBind({ keyId, adminUserId, ipAddress }) {
   });
 
   return { ok: true };
+}
+
+// ------------------------------------------------------------
+// SELF-SERVICE — reset do bind pelo próprio cliente (Sprint 4)
+// ------------------------------------------------------------
+// Regras (espelham ZapVoice):
+//   - 1 reset grátis a cada 30 dias (rolling window)
+//   - Ownership obrigatório (keyId tem que ser do userId)
+//   - Depois do 1º reset no mês, bloqueia → cliente precisa falar com
+//     suporte (futuro: painel admin)
+//
+// Entrada:  { keyId, userId, ipAddress }
+// Saída OK: { ok: true, code: 'RESET_OK', message }
+// Saída NOK:
+//   { ok: false, code: 'KEY_NOT_FOUND' }   — 404
+//   { ok: false, code: 'RESET_LIMIT' }     — 429
+// ------------------------------------------------------------
+export async function resetBind({ keyId, userId, ipAddress }) {
+  const key = await prisma.accessKey.findUnique({ where: { id: keyId } });
+  if (!key || key.userId !== userId) {
+    return {
+      ok: false,
+      code: 'KEY_NOT_FOUND',
+      message: 'Chave não encontrada',
+    };
+  }
+
+  const now = new Date();
+  const THIRTY_DAYS_MS = 30 * 86400000;
+
+  // Se a janela rolante acabou, zera o counter
+  const windowStart = key.resetCount30dResetAt;
+  let currentCount = key.resetCount30d;
+  let windowResetAt = windowStart;
+  if (!windowStart || now.getTime() - windowStart.getTime() > THIRTY_DAYS_MS) {
+    currentCount = 0;
+    windowResetAt = now;
+  }
+
+  // Já usou o reset gratuito desse ciclo? bloqueia
+  if (currentCount >= 1) {
+    await logAudit({
+      userId,
+      action: 'key.reset_blocked',
+      entityType: 'AccessKey',
+      entityId: key.id,
+      metadata: { count: currentCount, windowStart: windowResetAt?.toISOString() },
+      ipAddress,
+    });
+    return {
+      ok: false,
+      code: 'RESET_LIMIT',
+      message: 'Você já usou o reset gratuito deste mês. Entre em contato com o suporte para liberar um novo reset.',
+    };
+  }
+
+  // Executa reset: limpa bind + remove todos os devices + incrementa contador
+  await prisma.$transaction([
+    prisma.accessKey.update({
+      where: { id: key.id },
+      data: {
+        boundPhone: null,
+        boundAt: null,
+        resetCount30d: currentCount + 1,
+        resetCount30dResetAt: windowResetAt,
+        lastResetAt: now,
+      },
+    }),
+    prisma.keyDevice.deleteMany({ where: { accessKeyId: key.id } }),
+  ]);
+
+  await logAudit({
+    userId,
+    action: 'key.reset_self',
+    entityType: 'AccessKey',
+    entityId: key.id,
+    metadata: {
+      previousPhone: key.boundPhone,
+      newCount: currentCount + 1,
+    },
+    ipAddress,
+  });
+
+  return {
+    ok: true,
+    code: 'RESET_OK',
+    message: 'Vínculo resetado. Abra a extensão com seu novo número do WhatsApp para refazer o vínculo.',
+  };
 }
