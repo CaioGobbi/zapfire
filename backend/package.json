@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "grant-access": "node scripts/grant-access.js"
   },
   "dependencies": {
     "@fastify/cookie": "^9.4.0",
