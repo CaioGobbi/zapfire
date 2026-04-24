@@ -13,14 +13,16 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🔥 Zapfire seed iniciado');
 
-  // ---------- 1. Plano mensal ----------
-  const plan = await prisma.plan.upsert({
+  // ---------- 1. Planos ----------
+  // Mantém o monthly_x1 legado (usado pela chave de teste já em uso)
+  // e adiciona os planos comerciais do Sprint 4: Mensal (R$47) e Anual (R$395)
+  const planLegacy = await prisma.plan.upsert({
     where: { code: 'monthly_x1' },
     update: {},
     create: {
       code: 'monthly_x1',
       name: 'Mensal X1',
-      description: 'Plano mensal para afiliados X1',
+      description: 'Plano mensal para afiliados X1 (legado)',
       priceCents: 9700, // R$ 97
       billingCycle: 'MONTHLY',
       maxKeys: 1,
@@ -34,7 +36,64 @@ async function main() {
       },
     },
   });
-  console.log('✅ Plano criado:', plan.code);
+  console.log('✅ Plano legado:', planLegacy.code);
+
+  const planMonthly = await prisma.plan.upsert({
+    where: { code: 'monthly_v1' },
+    update: {
+      name: 'Mensal',
+      priceCents: 4700,
+      billingCycle: 'MONTHLY',
+      maxDevicesPerKey: 4,
+    },
+    create: {
+      code: 'monthly_v1',
+      name: 'Mensal',
+      description: 'Plano mensal Zapfire — R$47/mês, até 4 dispositivos',
+      priceCents: 4700, // R$ 47
+      billingCycle: 'MONTHLY',
+      maxKeys: 1,
+      maxDevicesPerKey: 4,
+      features: {
+        audioInjection: true,
+        funnels: true,
+        triggers: true,
+        scheduling: true,
+        multiDevice: true,
+      },
+    },
+  });
+  console.log('✅ Plano mensal:', planMonthly.code, '— R$', (planMonthly.priceCents / 100).toFixed(2));
+
+  const planAnnual = await prisma.plan.upsert({
+    where: { code: 'annual_v1' },
+    update: {
+      name: 'Anual',
+      priceCents: 39500,
+      billingCycle: 'ANNUAL',
+      maxDevicesPerKey: 4,
+    },
+    create: {
+      code: 'annual_v1',
+      name: 'Anual',
+      description: 'Plano anual Zapfire — R$395 (≈30% OFF vs 12× mensal)',
+      priceCents: 39500, // R$ 395
+      billingCycle: 'ANNUAL',
+      maxKeys: 1,
+      maxDevicesPerKey: 4,
+      features: {
+        audioInjection: true,
+        funnels: true,
+        triggers: true,
+        scheduling: true,
+        multiDevice: true,
+      },
+    },
+  });
+  console.log('✅ Plano anual: ', planAnnual.code, '— R$', (planAnnual.priceCents / 100).toFixed(2));
+
+  // Alias: chave de teste antiga continua apontando pro plano legado
+  const plan = planLegacy;
 
   // ---------- 2. Admin ----------
   const admin = await prisma.user.upsert({

@@ -19,51 +19,59 @@ datasource db {
 // USUÁRIO — quem compra e administra a assinatura
 // ------------------------------------------------------------
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  passwordHash  String   // bcrypt (SEM passlib, igual você já faz no MétriqAI)
-  fullName      String
-  phone         String?  // WhatsApp de contato (não é o WhatsApp vinculado!)
-  cpfCnpj       String?  @unique
+  id           String  @id @default(uuid())
+  email        String  @unique
+  passwordHash String // bcrypt (SEM passlib, igual você já faz no MétriqAI)
+  fullName     String
+  phone        String? // WhatsApp de contato (não é o WhatsApp vinculado!)
+  cpfCnpj      String? @unique
 
-  role          UserRole @default(CUSTOMER)
-  isActive      Boolean  @default(true)
+  role     UserRole @default(CUSTOMER)
+  isActive Boolean  @default(true)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  lastLoginAt   DateTime?
+  // Verificação de email e password set (Sprint 4 — painel web)
+  // emailVerified: fica false até o user consumir o magic link e setar a senha pela 1ª vez
+  // passwordSetAt: timestamp do set inicial (auditoria + futuro force reset)
+  emailVerified Boolean   @default(false)
+  passwordSetAt DateTime?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
 
   subscriptions Subscription[]
   keys          AccessKey[]
   auditLogs     AuditLog[]
+  emailTokens   EmailToken[]
+  refreshTokens RefreshToken[]
 
   @@index([email])
   @@map("users")
 }
 
 enum UserRole {
-  CUSTOMER   // assinante comum
-  AFFILIATE  // afiliado que revende (se você quiser programa de afiliados depois)
-  ADMIN      // você e o Vinicius
+  CUSTOMER // assinante comum
+  AFFILIATE // afiliado que revende (se você quiser programa de afiliados depois)
+  ADMIN // você e o Vinicius
 }
 
 // ------------------------------------------------------------
 // PLANO — catálogo de planos disponíveis
 // ------------------------------------------------------------
 model Plan {
-  id               String   @id @default(uuid())
-  code             String   @unique  // "monthly", "annual", "business_3"
-  name             String              // "Mensal", "Anual 50% OFF"
+  id               String       @id @default(uuid())
+  code             String       @unique // "monthly", "annual", "business_3"
+  name             String // "Mensal", "Anual 50% OFF"
   description      String?
-  priceCents       Int                 // em centavos — mesmo padrão do PayT do MétriqAI
+  priceCents       Int // em centavos — mesmo padrão do PayT do MétriqAI
   billingCycle     BillingCycle
-  maxKeys          Int      @default(1)    // quantas chaves vêm nesse plano
-  maxDevicesPerKey Int      @default(4)    // dispositivos simultâneos no mesmo número
-  features         Json                    // feature flags: { funnels: true, triggers: true, ... }
-  isActive         Boolean  @default(true)
+  maxKeys          Int          @default(1) // quantas chaves vêm nesse plano
+  maxDevicesPerKey Int          @default(4) // dispositivos simultâneos no mesmo número
+  features         Json // feature flags: { funnels: true, triggers: true, ... }
+  isActive         Boolean      @default(true)
 
-  createdAt        DateTime @default(now())
-  subscriptions    Subscription[]
+  createdAt     DateTime       @default(now())
+  subscriptions Subscription[]
 
   @@map("plans")
 }
@@ -74,49 +82,57 @@ enum BillingCycle {
   SEMIANNUAL
   ANNUAL
   LIFETIME
-  PREPAID     // pago sem renovação automática, igual ZapVoice oferece
+  PREPAID // pago sem renovação automática, igual ZapVoice oferece
 }
 
 // ------------------------------------------------------------
 // ASSINATURA — relação user × plano com status de pagamento
 // ------------------------------------------------------------
 model Subscription {
-  id                String             @id @default(uuid())
-  userId            String
-  planId            String
+  id     String @id @default(uuid())
+  userId String
+  planId String
 
   status            SubscriptionStatus @default(PENDING)
-  gatewayProvider   String             // "pagarme", "eduzz", "guru"
-  gatewaySubId      String?            @unique  // ID da assinatura no gateway
+  gatewayProvider   String // "kirvano", "pagarme", "manual"
+  gatewaySubId      String?            @unique // ID da assinatura no gateway
   gatewayCustomerId String?
 
-  startedAt         DateTime?
-  currentPeriodEnd  DateTime           // data de vencimento — é o que aparece no painel (03/04/2026 no seu print)
-  canceledAt        DateTime?
-  cancelReason      String?
+  // Integração Kirvano (Sprint 4)
+  // kirvanoSaleId: ID da venda original que criou a assinatura (idempotência do webhook)
+  // kirvanoStatus: status cru da Kirvano (WAITING_PAYMENT, APPROVED, CANCELED, REFUNDED...)
+  // gracePeriodEndsAt: preenchido quando entra em graça; limpa na renovação
+  kirvanoSaleId     String?   @unique
+  kirvanoStatus     String?
+  gracePeriodEndsAt DateTime?
 
-  autoRenew         Boolean            @default(true)
+  startedAt        DateTime?
+  currentPeriodEnd DateTime // data de vencimento — é o que aparece no painel (03/04/2026 no seu print)
+  canceledAt       DateTime?
+  cancelReason     String?
 
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  autoRenew Boolean @default(true)
 
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan              Plan               @relation(fields: [planId], references: [id])
-  keys              AccessKey[]
-  payments          Payment[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan     Plan        @relation(fields: [planId], references: [id])
+  keys     AccessKey[]
+  payments Payment[]
 
   @@index([userId, status])
-  @@index([currentPeriodEnd])  // pra job diário de expiração
+  @@index([currentPeriodEnd]) // pra job diário de expiração
   @@map("subscriptions")
 }
 
 enum SubscriptionStatus {
-  PENDING    // aguardando pagamento
-  ACTIVE     // plano ativo — libera uso
-  PAST_DUE   // pagamento falhou, em retry
-  CANCELED   // cancelado pelo usuário (ainda ativo até currentPeriodEnd)
-  EXPIRED    // passou do currentPeriodEnd sem renovação
-  BLOCKED    // bloqueado manualmente pelo admin
+  PENDING // aguardando pagamento
+  ACTIVE // plano ativo — libera uso
+  PAST_DUE // pagamento falhou, em retry
+  CANCELED // cancelado pelo usuário (ainda ativo até currentPeriodEnd)
+  EXPIRED // passou do currentPeriodEnd sem renovação
+  BLOCKED // bloqueado manualmente pelo admin
 }
 
 // ------------------------------------------------------------
@@ -129,37 +145,45 @@ enum SubscriptionStatus {
 // - Pode ser reset manualmente pelo admin se o usuário trocar de número
 // ------------------------------------------------------------
 model AccessKey {
-  id             String    @id @default(uuid())
+  id             String @id @default(uuid())
   userId         String
   subscriptionId String
 
   // A chave em si — UUID sem hífens, igual ao print do ZapVoice
   // Ex: "3b36c0db084640b688a4c4e58d9c7f96"
-  keyValue       String    @unique @db.VarChar(32)
+  keyValue String @unique @db.VarChar(32)
 
   // Nome amigável que aparece no painel (tipo "Caio Gobbi" no seu print)
-  label          String
+  label String
 
   // Estado do bind — null enquanto não vinculou a nenhum número
-  boundPhone     String?   @db.VarChar(20)
-  boundAt        DateTime?
+  boundPhone String?   @db.VarChar(20)
+  boundAt    DateTime?
 
   // Controle de dispositivos — WA multi-device permite 4
-  devices        KeyDevice[]
+  devices KeyDevice[]
 
-  status         KeyStatus @default(ACTIVE)
-  blockedReason  String?
-  blockedAt      DateTime?
+  status        KeyStatus @default(ACTIVE)
+  blockedReason String?
+  blockedAt     DateTime?
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  lastUsedAt     DateTime?
+  // Reset de bind self-service (Sprint 4)
+  // resetCount30d: quantos resets nos últimos 30d (limite = 1 por padrão)
+  // resetCount30dResetAt: quando o counter foi zerado (rolling window)
+  // lastResetAt: último reset efetivamente executado (pra auditoria e UI)
+  resetCount30d        Int       @default(0)
+  resetCount30dResetAt DateTime?
+  lastResetAt          DateTime?
 
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  validations    ValidationLog[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  lastUsedAt DateTime?
 
-  @@index([keyValue])          // lookup principal, acontece toda vez que extensão abre
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription    @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  validations  ValidationLog[]
+
+  @@index([keyValue]) // lookup principal, acontece toda vez que extensão abre
   @@index([boundPhone])
   @@index([userId])
   @@map("access_keys")
@@ -167,9 +191,9 @@ model AccessKey {
 
 enum KeyStatus {
   ACTIVE
-  SUSPENDED       // suspensão temporária (ex: acessos simultâneos suspeitos)
-  BLOCKED         // bloqueio permanente (pirataria confirmada)
-  EXPIRED         // assinatura venceu
+  SUSPENDED // suspensão temporária (ex: acessos simultâneos suspeitos)
+  BLOCKED // bloqueio permanente (pirataria confirmada)
+  EXPIRED // assinatura venceu
 }
 
 // ------------------------------------------------------------
@@ -180,18 +204,18 @@ enum KeyStatus {
 // e manda junto a cada validação.
 // ------------------------------------------------------------
 model KeyDevice {
-  id            String    @id @default(uuid())
-  accessKeyId   String
+  id          String @id @default(uuid())
+  accessKeyId String
 
-  deviceId      String    // UUID gerado pela extensão
+  deviceId      String // UUID gerado pela extensão
   userAgent     String?
   ipAddress     String?
   chromeVersion String?
 
-  firstSeenAt   DateTime  @default(now())
-  lastSeenAt    DateTime  @default(now())
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
 
-  accessKey     AccessKey @relation(fields: [accessKeyId], references: [id], onDelete: Cascade)
+  accessKey AccessKey @relation(fields: [accessKeyId], references: [id], onDelete: Cascade)
 
   @@unique([accessKeyId, deviceId])
   @@index([lastSeenAt])
@@ -207,18 +231,18 @@ model KeyDevice {
 // - Métricas de uso pro admin
 // ------------------------------------------------------------
 model ValidationLog {
-  id           String             @id @default(uuid())
-  accessKeyId  String?            // null se chave nem existe
-  keyValueTry  String             // o que o cara tentou (pra detectar força bruta)
-  phoneTry     String?
-  deviceId     String?
-  ipAddress    String
-  userAgent    String?
-  result       ValidationResult
-  reason       String?
-  createdAt    DateTime           @default(now())
+  id          String           @id @default(uuid())
+  accessKeyId String? // null se chave nem existe
+  keyValueTry String // o que o cara tentou (pra detectar força bruta)
+  phoneTry    String?
+  deviceId    String?
+  ipAddress   String
+  userAgent   String?
+  result      ValidationResult
+  reason      String?
+  createdAt   DateTime         @default(now())
 
-  accessKey    AccessKey?         @relation(fields: [accessKeyId], references: [id], onDelete: SetNull)
+  accessKey AccessKey? @relation(fields: [accessKeyId], references: [id], onDelete: SetNull)
 
   @@index([accessKeyId, createdAt])
   @@index([ipAddress, createdAt]) // pra rate limiting
@@ -228,31 +252,40 @@ model ValidationLog {
 enum ValidationResult {
   SUCCESS
   INVALID_KEY
-  WRONG_PHONE      // chave boundPhone != phone enviado
+  WRONG_PHONE // chave boundPhone != phone enviado
   EXPIRED
   BLOCKED
-  DEVICE_LIMIT     // tentou usar no 5º dispositivo
+  DEVICE_LIMIT // tentou usar no 5º dispositivo
 }
 
 // ------------------------------------------------------------
 // PAGAMENTO — cada cobrança/renovação
 // ------------------------------------------------------------
 model Payment {
-  id                String         @id @default(uuid())
-  subscriptionId    String
+  id             String @id @default(uuid())
+  subscriptionId String
 
-  gatewayProvider   String
-  gatewayPaymentId  String         @unique
-  amountCents       Int
-  status            PaymentStatus
-  paymentMethod     String?        // "credit_card", "pix", "boleto"
+  gatewayProvider  String
+  gatewayPaymentId String        @unique
+  // Valor efetivamente pago (em centavos). Renomeado de amountCents.
+  // @map preserva a coluna antiga "amountCents" no Postgres (evita data loss em dev).
+  paidAmountCents  Int           @map("amountCents")
+  status           PaymentStatus
+  paymentMethod    String? // "credit_card", "pix", "boleto"
 
-  paidAt            DateTime?
-  createdAt         DateTime       @default(now())
+  // Integração Kirvano (Sprint 4)
+  // kirvanoSaleId: id único da venda na Kirvano, usado pra idempotência do webhook
+  // nfIssued: flag pra controle manual do contador (ainda não é auto)
+  kirvanoSaleId String?   @unique
+  nfIssued      Boolean   @default(false)
+  nfIssuedAt    DateTime?
 
-  rawWebhookPayload Json?          // guardar o webhook cru pra debug
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
 
-  subscription      Subscription   @relation(fields: [subscriptionId], references: [id])
+  rawWebhookPayload Json? // guardar o webhook cru pra debug
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
 
   @@index([subscriptionId])
   @@map("payments")
@@ -271,17 +304,71 @@ enum PaymentStatus {
 // ------------------------------------------------------------
 model AuditLog {
   id         String   @id @default(uuid())
-  userId     String?  // quem fez a ação (null se foi sistema/webhook)
-  action     String   // "key.created", "key.blocked", "bind.reset", ...
-  entityType String?  // "AccessKey", "Subscription", ...
+  userId     String? // quem fez a ação (null se foi sistema/webhook)
+  action     String // "key.created", "key.blocked", "bind.reset", ...
+  entityType String? // "AccessKey", "Subscription", ...
   entityId   String?
   metadata   Json?
   ipAddress  String?
   createdAt  DateTime @default(now())
 
-  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([action, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// ------------------------------------------------------------
+// EMAIL TOKEN — magic link pra primeiro acesso / password reset
+// ------------------------------------------------------------
+// Nunca salva o token em plaintext. Guarda só o SHA-256 hash.
+// Quando o client envia o token, o backend hasheia e bate com
+// o tokenHash. Se o banco vazar, links NÃO podem ser reusados.
+// ------------------------------------------------------------
+model EmailToken {
+  id        String         @id @default(uuid())
+  userId    String
+  type      EmailTokenType
+  tokenHash String         @unique // SHA-256 do plaintext
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@map("email_tokens")
+}
+
+enum EmailTokenType {
+  MAGIC_LINK // primeiro acesso, consome e já seta senha
+  PASSWORD_RESET // reset de senha normal (form "esqueci minha senha")
+}
+
+// ------------------------------------------------------------
+// REFRESH TOKEN — sessões do painel web (rotação em cada refresh)
+// ------------------------------------------------------------
+// Access token é JWT de 15min (stateless, não fica no banco).
+// Refresh token é opaco (32 bytes hex), fica no cookie HttpOnly
+// do painel e tem hash SHA-256 aqui. Rotação: cada /refresh gera
+// um novo e revoga o anterior.
+// ------------------------------------------------------------
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique // SHA-256 do plaintext
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
