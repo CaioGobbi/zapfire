@@ -28,3 +28,7 @@ Thumbs.db
 # Chrome extension packages
 *.crx
 *.zip
+
+# Artefatos de teste (curl -c/-b, etc)
+cookies.txt
+cookies-*.txt
