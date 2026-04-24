@@ -71,9 +71,12 @@ function hitEmailRateLimit(email, maxPerHour = 10) {
 // Cookie options
 // ------------------------------------------------------------
 function refreshCookieOpts() {
+  // SameSite=Lax: envia em navegações top-level + fetch same-site.
+  // Nosso setup (:3001 ↔ :3000) é same-site (ambos localhost), então Lax
+  // atende. Strict era bloqueado em alguns cenários de bootstrap por F5.
   return {
     httpOnly: true,
-    sameSite: 'strict',
+    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/api/v1/account',
     maxAge: Math.floor(REFRESH_TTL_MS / 1000),
