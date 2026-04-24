@@ -307,6 +307,9 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
   const [setPwOpen, setSetPwOpen] = useState(false);
   const [grantKeyOpen, setGrantKeyOpen] = useState(false);
   const [magicLinkBusy, setMagicLinkBusy] = useState(false);
+  const [magicLinkResult, setMagicLinkResult] = useState<{
+    url: string; emailSent: boolean; emailMockMode: boolean;
+  } | null>(null);
 
   async function sendMagicLink() {
     if (!confirm(`Enviar magic link novo pra ${user.email}?\nO cliente recebe email com link válido por 7 dias.`)) return;
@@ -315,15 +318,13 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
       const res = await apiPost<{ ok: boolean; magicLinkUrl: string; emailSent: boolean; emailMockMode: boolean }>(
         `/admin/users/${user.id}/send-magic-link`,
       );
-      if (res.emailSent && !res.emailMockMode) {
-        toast.success('Magic link enviado por email');
-      } else if (res.emailMockMode) {
-        toast.warning('Magic link gerado (email em modo MOCK — copie do console do backend ou abaixo)');
-      } else {
-        toast.warning('Magic link gerado mas envio de email falhou');
-      }
-      // Mostra o link num toast separado pra admin copiar se quiser entregar manualmente
-      console.log('[admin] magic link:', res.magicLinkUrl);
+      // Sempre abre dialog com a URL — admin tem cópia mesmo se email falhou
+      // ou caiu em spam, e pode entregar manual via WhatsApp se quiser.
+      setMagicLinkResult({
+        url: res.magicLinkUrl,
+        emailSent: res.emailSent,
+        emailMockMode: res.emailMockMode,
+      });
       onAction();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : 'Falha — veja console';
@@ -385,7 +386,89 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
         userEmail={user.email}
         onDone={() => { setGrantKeyOpen(false); onAction(); }}
       />
+      <MagicLinkResultDialog
+        result={magicLinkResult}
+        userEmail={user.email}
+        onClose={() => setMagicLinkResult(null)}
+      />
     </Card>
+  );
+}
+
+function MagicLinkResultDialog({
+  result, userEmail, onClose,
+}: {
+  result: { url: string; emailSent: boolean; emailMockMode: boolean } | null;
+  userEmail: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  if (!result) return null;
+
+  async function copyUrl() {
+    if (await copyToClipboard(result!.url)) {
+      setCopied(true);
+      toast.success('Link copiado');
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      toast.error('Falha ao copiar');
+    }
+  }
+
+  // Mensagem de status do email
+  let statusLine: React.ReactNode;
+  if (result.emailSent && !result.emailMockMode) {
+    statusLine = (
+      <span className="text-green-500">
+        ✓ Email enviado — pede pro cliente checar a caixa principal e a aba de promoções/spam
+      </span>
+    );
+  } else if (result.emailMockMode) {
+    statusLine = (
+      <span className="text-amber-500">
+        ⚠ Modo MOCK no backend (RESEND_API_KEY vazia) — entregue o link manualmente
+      </span>
+    );
+  } else {
+    statusLine = (
+      <span className="text-amber-500">
+        ⚠ Envio falhou — confira logs do Railway por <code>[resend:error]</code>; entregue o link manualmente
+      </span>
+    );
+  }
+
+  return (
+    <Dialog open={!!result} onOpenChange={(v) => { if (!v) { onClose(); setCopied(false); } }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Magic link gerado</DialogTitle>
+          <DialogDescription>
+            Pra <strong>{userEmail}</strong> — válido por 7 dias, uso único.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs text-muted-foreground">URL do magic link</Label>
+            <div className="mt-1 flex gap-2">
+              <code className="flex-1 px-3 py-2 bg-muted rounded text-xs break-all font-mono">
+                {result.url}
+              </code>
+              <Button variant="outline" size="sm" onClick={copyUrl} className="shrink-0">
+                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </Button>
+            </div>
+          </div>
+
+          <div className="text-xs">{statusLine}</div>
+        </div>
+
+        <DialogFooter>
+          <Button onClick={() => { onClose(); setCopied(false); }}>Fechar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
