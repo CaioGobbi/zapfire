@@ -96,17 +96,33 @@ async function main() {
   const plan = planLegacy;
 
   // ---------- 2. Admin ----------
+  // Sprint 6 — admin precisa de `passwordSetAt` + `emailVerified` pro
+  // /login direto funcionar (senão o gate PASSWORD_NOT_SET bloqueia).
+  // Se já existe, NÃO sobrescreve a senha (pode ter sido mudada pelo admin).
   const admin = await prisma.user.upsert({
     where: { email: process.env.ADMIN_EMAIL || 'melfi@improvavel.com.br' },
-    update: {},
+    update: {
+      role: 'ADMIN',
+      isActive: true,
+      emailVerified: true,
+    },
     create: {
       email: process.env.ADMIN_EMAIL || 'melfi@improvavel.com.br',
       passwordHash: await bcrypt.hash(process.env.ADMIN_PASSWORD || 'changeme', 10),
       fullName: 'Melfi (Admin)',
       role: 'ADMIN',
+      emailVerified: true,
+      passwordSetAt: new Date(),
     },
   });
-  console.log('✅ Admin criado:', admin.email);
+  // Garante passwordSetAt mesmo em admins pré-existentes (sem tocar senha)
+  if (!admin.passwordSetAt) {
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { passwordSetAt: new Date() },
+    });
+  }
+  console.log('✅ Admin:', admin.email, '(role: ADMIN)');
 
   // ---------- 3. Usuário de teste + chave ----------
   const testUser = await prisma.user.upsert({

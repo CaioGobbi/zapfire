@@ -12,6 +12,7 @@ import cookie from '@fastify/cookie';
 import authRoutes from './routes/auth.js';
 import webhookRoutes from './routes/webhooks.js';
 import accountRoutes from './routes/account.js';
+import adminRoutes from './routes/admin.js';
 
 const fastify = Fastify({
   logger: {
@@ -67,6 +68,7 @@ fastify.get('/health', async () => ({
 await fastify.register(authRoutes, { prefix: '/api/v1' });
 await fastify.register(webhookRoutes, { prefix: '/api/v1' });
 await fastify.register(accountRoutes, { prefix: '/api/v1/account' });
+await fastify.register(adminRoutes, { prefix: '/api/v1/admin' });
 
 // --- Start ---
 const port = Number(process.env.PORT) || 3000;
