@@ -7,11 +7,8 @@
 // Aparece sempre; se o user já tá logado, o botão no header vira
 // "Ir pro painel" em vez de "Entrar".
 //
-// Placeholders (trocar quando tiver as URLs reais):
-//   KIRVANO_CHECKOUT_URL  - link do checkout na Kirvano (plano mensal/anual)
-//   CHROME_WEB_STORE_URL  - link da extensão na CWS (após aprovação)
-//
-// Os dois abrem em nova aba com noopener/noreferrer por segurança.
+// Os links de checkout abrem em nova aba com noopener/noreferrer.
+// CHROME_WEB_STORE_URL ainda é placeholder — atualizar após aprovação.
 // ============================================================
 
 import Link from 'next/link';
@@ -29,9 +26,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-// TODO Sprint 8 — substituir pelos URLs reais
-const KIRVANO_CHECKOUT_URL = '#TODO-CHECKOUT-KIRVANO';
-const KIRVANO_CHECKOUT_ANNUAL_URL = '#TODO-CHECKOUT-KIRVANO-ANUAL';
+const KIRVANO_CHECKOUT_URL = 'https://pay.kirvano.com/10eb5393-19a0-4894-ab70-292b49b5c84c';
+const KIRVANO_CHECKOUT_ANNUAL_URL = 'https://pay.kirvano.com/7b80209b-9bb7-43f1-95a0-346a6fe35fd5';
 const CHROME_WEB_STORE_URL = '#TODO-CHROME-WEB-STORE';
 
 export default function LandingPage() {
