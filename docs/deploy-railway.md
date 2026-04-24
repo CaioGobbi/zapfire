@@ -16,10 +16,15 @@ Railway Project "zapfire"
 ├── Service: Postgres (managed)
 │   └── Env injetado automaticamente no backend: DATABASE_URL
 └── Service: zapfire-backend (GitHub → backend/)
-    ├── Builder: Nixpacks (auto-detecta Node 20)
-    ├── Start: npx prisma migrate deploy && node src/server.js
+    ├── Builder: Dockerfile (backend/Dockerfile — Node 20 slim + OpenSSL)
+    ├── CMD: sh -c "npx prisma migrate deploy && node src/server.js"
     └── Healthcheck: GET /health
 ```
+
+> **Por que Dockerfile e não Nixpacks/Railpack?** Railway migrou pra Railpack
+> recentemente e o auto-detect às vezes falha em monorepos. Dockerfile é
+> determinístico — a gente controla exatamente o ambiente (Node version,
+> OpenSSL, comando de start).
 
 ## Passo a passo
 
@@ -41,9 +46,9 @@ Railway Project "zapfire"
 1. **+ New** → **GitHub Repo** → `zapfire`
 2. Nome do serviço: `zapfire-backend`
 3. **Settings** do serviço:
-   - **Root Directory**: `backend`
+   - **Root Directory**: `backend` ← **essencial, senão o build falha**
    - **Watch Paths**: `backend/**` (redeploy só quando mexer em `backend/`)
-   - Railway lê o `railway.json` dentro de `backend/` automaticamente
+   - Railway lê o `railway.json` dentro de `backend/` automaticamente, que aponta pro `Dockerfile`
 
 ### 4. Conecta o backend ao Postgres
 

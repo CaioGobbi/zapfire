@@ -1,0 +1,14 @@
+# Não copia pra imagem — reduz tamanho e evita incluir lixo
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+cookies.txt
+cookies-*.txt
+.git
+.gitignore
+Dockerfile
+.dockerignore
+railway.json
+README.md
