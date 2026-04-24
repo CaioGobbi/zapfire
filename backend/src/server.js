@@ -33,15 +33,21 @@ await fastify.register(helmet, { contentSecurityPolicy: false });
 // - Painel web: origin(s) em PANEL_ORIGINS (default: localhost:3001). Aceita com credentials
 //   (necessário pro cookie de refresh)
 // - Requests sem origin (curl, server-to-server): aceita
+// Normaliza: remove barra(s) no final pra comparação.
+// Browsers mandam Origin sem barra, mas usuário pode ter colado a URL
+// com barra no env. Toleramos ambos os formatos.
+const stripSlash = (s) => (s || '').replace(/\/+$/, '');
+
 await fastify.register(cors, {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (origin.startsWith('chrome-extension://')) return cb(null, origin);
+    const normOrigin = stripSlash(origin);
     const allowed = (process.env.PANEL_ORIGINS || process.env.PANEL_BASE_URL || 'http://localhost:3001')
       .split(',')
-      .map((s) => s.trim())
+      .map((s) => stripSlash(s.trim()))
       .filter(Boolean);
-    if (allowed.includes(origin)) return cb(null, origin);
+    if (allowed.includes(normOrigin)) return cb(null, origin);
     return cb(null, false);
   },
   credentials: true,
