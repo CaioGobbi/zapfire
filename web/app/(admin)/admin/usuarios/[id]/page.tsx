@@ -14,6 +14,9 @@ import {
   UserCog,
   Check,
   Copy,
+  KeyRound,
+  Lock,
+  Mail,
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -301,6 +304,35 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 // ============================================================
 function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void }) {
   const [promoteOpen, setPromoteOpen] = useState(false);
+  const [setPwOpen, setSetPwOpen] = useState(false);
+  const [grantKeyOpen, setGrantKeyOpen] = useState(false);
+  const [magicLinkBusy, setMagicLinkBusy] = useState(false);
+
+  async function sendMagicLink() {
+    if (!confirm(`Enviar magic link novo pra ${user.email}?\nO cliente recebe email com link válido por 7 dias.`)) return;
+    setMagicLinkBusy(true);
+    try {
+      const res = await apiPost<{ ok: boolean; magicLinkUrl: string; emailSent: boolean; emailMockMode: boolean }>(
+        `/admin/users/${user.id}/send-magic-link`,
+      );
+      if (res.emailSent && !res.emailMockMode) {
+        toast.success('Magic link enviado por email');
+      } else if (res.emailMockMode) {
+        toast.warning('Magic link gerado (email em modo MOCK — copie do console do backend ou abaixo)');
+      } else {
+        toast.warning('Magic link gerado mas envio de email falhou');
+      }
+      // Mostra o link num toast separado pra admin copiar se quiser entregar manualmente
+      console.log('[admin] magic link:', res.magicLinkUrl);
+      onAction();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Falha — veja console';
+      toast.error(msg);
+    } finally {
+      setMagicLinkBusy(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
@@ -318,15 +350,40 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
             <span>Último login: <span className="text-foreground">{formatDateTime(user.lastLoginAt)}</span></span>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>
-          <UserCog className="w-4 h-4 mr-2" /> Mudar role
-        </Button>
+        <div className="flex flex-col gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => setGrantKeyOpen(true)}>
+            <KeyRound className="w-4 h-4 mr-2" /> Nova chave
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setSetPwOpen(true)}>
+            <Lock className="w-4 h-4 mr-2" /> Definir senha
+          </Button>
+          <Button variant="outline" size="sm" onClick={sendMagicLink} disabled={magicLinkBusy}>
+            <Mail className="w-4 h-4 mr-2" /> {magicLinkBusy ? 'Enviando…' : 'Enviar magic link'}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>
+            <UserCog className="w-4 h-4 mr-2" /> Mudar role
+          </Button>
+        </div>
       </CardHeader>
       <PromoteDialog
         open={promoteOpen}
         onOpenChange={setPromoteOpen}
         user={user}
         onDone={() => { setPromoteOpen(false); onAction(); }}
+      />
+      <SetPasswordDialog
+        open={setPwOpen}
+        onOpenChange={setSetPwOpen}
+        userId={user.id}
+        userEmail={user.email}
+        onDone={() => { setSetPwOpen(false); onAction(); }}
+      />
+      <GrantKeyDialog
+        open={grantKeyOpen}
+        onOpenChange={setGrantKeyOpen}
+        userId={user.id}
+        userEmail={user.email}
+        onDone={() => { setGrantKeyOpen(false); onAction(); }}
       />
     </Card>
   );
@@ -664,6 +721,160 @@ function SetStatusDialog({ open, onOpenChange, subId, currentStatus, onDone }: a
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
           <Button onClick={go} disabled={busy}>{busy ? 'Atualizando…' : 'Atualizar'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SetPasswordDialog({ open, onOpenChange, userId, userEmail, onDone }: any) {
+  const [senha, setSenha] = useState('');
+  const [confirma, setConfirma] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  function reset() { setSenha(''); setConfirma(''); setBusy(false); }
+
+  async function go() {
+    if (senha.length < 8) { toast.error('Mínimo 8 caracteres'); return; }
+    if (senha !== confirma) { toast.error('Senhas não batem'); return; }
+    setBusy(true);
+    try {
+      await apiPost(`/admin/users/${userId}/set-password`, { senha });
+      toast.success('Senha definida — sessões anteriores invalidadas');
+      reset();
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Definir senha do usuário</DialogTitle>
+          <DialogDescription>
+            Define uma senha pra <strong>{userEmail}</strong>.
+            Todas as sessões ativas dele são invalidadas (precisa logar de novo).
+            Use quando o cliente perdeu a senha e prefere que você defina manualmente.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="set-pw">Nova senha (mín. 8 chars)</Label>
+            <Input
+              id="set-pw" type="text" autoFocus autoComplete="new-password"
+              value={senha} onChange={(e) => setSenha(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="set-pw-confirm">Confirmar</Label>
+            <Input
+              id="set-pw-confirm" type="text" autoComplete="new-password"
+              value={confirma} onChange={(e) => setConfirma(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Definindo…' : 'Definir senha'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GrantKeyDialog({ open, onOpenChange, userId, userEmail, onDone }: any) {
+  const [dias, setDias] = useState('365');
+  const [planCode, setPlanCode] = useState<'monthly_v1' | 'annual_v1'>('monthly_v1');
+  const [label, setLabel] = useState('');
+  const [sendEmail, setSendEmail] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [keyValue, setKeyValue] = useState<string | null>(null);
+
+  function reset() { setDias('365'); setPlanCode('monthly_v1'); setLabel(''); setSendEmail(true); setKeyValue(null); setBusy(false); }
+
+  async function go() {
+    const diasNum = parseInt(dias, 10);
+    if (!Number.isFinite(diasNum) || diasNum <= 0) { toast.error('Dias inválido'); return; }
+    setBusy(true);
+    try {
+      const res = await apiPost<{ ok: boolean; keyValue: string; emailSent: boolean; emailMockMode: boolean }>(
+        `/admin/users/${userId}/grant-key`,
+        { dias: diasNum, planCode, label: label.trim() || undefined, sendEmail },
+      );
+      setKeyValue(res.keyValue);
+      toast.success('Nova chave criada' + (res.emailSent && !res.emailMockMode ? ' — email enviado' : ''));
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+
+  if (keyValue) {
+    return (
+      <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Nova chave criada</DialogTitle>
+            <DialogDescription>Pra {userEmail}</DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label className="text-xs text-muted-foreground">Chave de acesso</Label>
+            <code className="block mt-1 px-3 py-2 bg-muted rounded text-xs break-all font-mono">{keyValue}</code>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => { reset(); onOpenChange(false); }}>Fechar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Criar nova chave + assinatura</DialogTitle>
+          <DialogDescription>
+            Cria uma assinatura ACTIVE adicional pra <strong>{userEmail}</strong> + chave nova
+            (não reusa a existente). Útil quando o cliente quer chave separada pra outro número.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="gk-dias">Dias</Label>
+              <Input id="gk-dias" type="number" min={1} max={3650} value={dias} onChange={(e) => setDias(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="gk-plano">Plano</Label>
+              <select
+                id="gk-plano" value={planCode}
+                onChange={(e) => setPlanCode(e.target.value as 'monthly_v1' | 'annual_v1')}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="monthly_v1">Mensal (R$47)</option>
+                <option value="annual_v1">Anual (R$395)</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gk-label">Label da chave (opcional)</Label>
+            <Input
+              id="gk-label" type="text" value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Ex: Whatsapp secundário"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+            <span>Enviar email avisando da nova chave</span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Criando…' : 'Criar chave'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -19,6 +19,12 @@ import { prisma } from '../lib/prisma.js';
 import { authGuard } from '../middleware/authGuard.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { resetKeyBind } from '../services/keyService.js';
+import {
+  grantAccess,
+  setUserPassword,
+  grantNewKey,
+  sendNewMagicLink,
+} from '../services/grantService.js';
 
 const ADMIN_GUARDS = { preHandler: [authGuard, requireAdmin] };
 
@@ -596,5 +602,201 @@ export default async function adminRoutes(fastify) {
       },
     });
     return reply.code(200).send({ ok: true, message: `Role alterada pra ${parsed.data.role}` });
+  });
+
+  // ====================================================
+  // POST /grant-access — cria/anexa cortesia completa
+  // ====================================================
+  // Equivalente UI do scripts/grant-access.js. Cria User (ou reusa
+  // se já existe), Subscription manual, AccessKey nova (ou reusa
+  // se user já tem ativa), opcional magic link, opcional email.
+  // ====================================================
+  fastify.post('/grant-access', ADMIN_GUARDS, async (request, reply) => {
+    const parsed = z
+      .object({
+        email: z.string().email(),
+        dias: z.number().int().min(1).max(3650).default(365),
+        planCode: z.enum(['monthly_v1', 'annual_v1', 'monthly_x1']).default('monthly_v1'),
+        nome: z.string().trim().min(1).max(120).optional(),
+        label: z.string().trim().min(1).max(120).optional(),
+        senha: z.string().min(8).max(128).optional(),
+        sendEmail: z.boolean().default(true),
+        forceNewKey: z.boolean().default(false),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: 'BAD_REQUEST', issues: parsed.error.issues });
+    }
+
+    const result = await grantAccess(parsed.data);
+    if (!result.ok) {
+      const status = result.code === 'PLAN_NOT_FOUND' ? 404 : 400;
+      return reply.code(status).send(result);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.access.granted',
+        entityType: 'Subscription',
+        entityId: result.subscription.id,
+        metadata: {
+          targetEmail: parsed.data.email,
+          targetUserId: result.user.id,
+          planCode: parsed.data.planCode,
+          dias: parsed.data.dias,
+          userIsNew: result.userIsNew,
+          keyReused: result.keyReused,
+          hadSenha: !!parsed.data.senha,
+          sentEmail: parsed.data.sendEmail,
+          source: 'admin_panel',
+        },
+        ipAddress: getIp(request),
+      },
+    });
+
+    return reply.code(200).send({
+      ok: true,
+      userId: result.user.id,
+      subscriptionId: result.subscription.id,
+      keyValue: result.accessKey.keyValue,
+      keyReused: result.keyReused,
+      userIsNew: result.userIsNew,
+      magicLinkUrl: result.magicLinkUrl,
+      emailSent: result.emailResult?.ok || false,
+      emailMockMode: result.emailResult?.mockMode || false,
+    });
+  });
+
+  // ====================================================
+  // POST /users/:id/set-password — admin define senha do user
+  // ====================================================
+  fastify.post('/users/:id/set-password', ADMIN_GUARDS, async (request, reply) => {
+    const parsed = z
+      .object({ senha: z.string().min(8).max(128) })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: 'BAD_REQUEST', issues: parsed.error.issues });
+    }
+
+    const result = await setUserPassword({
+      userId: request.params.id,
+      senha: parsed.data.senha,
+    });
+    if (!result.ok) {
+      const status = result.code === 'USER_NOT_FOUND' ? 404 : 400;
+      return reply.code(status).send(result);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.user.password_set',
+        entityType: 'User',
+        entityId: result.user.id,
+        metadata: {
+          targetEmail: result.user.email,
+          revokedRefreshTokens: true,
+        },
+        ipAddress: getIp(request),
+      },
+    });
+
+    return reply.code(200).send({
+      ok: true,
+      message: 'Senha definida e sessões anteriores invalidadas',
+    });
+  });
+
+  // ====================================================
+  // POST /users/:id/grant-key — nova subscription + nova chave
+  // ====================================================
+  // Sempre cria chave NOVA (não reusa). Pressupõe user existe.
+  // Útil quando: cliente quer chave separada pra outro número, ou
+  // assinatura adicional (ex: comprou um anual extra de presente).
+  // ====================================================
+  fastify.post('/users/:id/grant-key', ADMIN_GUARDS, async (request, reply) => {
+    const parsed = z
+      .object({
+        dias: z.number().int().min(1).max(3650).default(365),
+        planCode: z.enum(['monthly_v1', 'annual_v1', 'monthly_x1']).default('monthly_v1'),
+        label: z.string().trim().min(1).max(120).optional(),
+        sendEmail: z.boolean().default(true),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: 'BAD_REQUEST', issues: parsed.error.issues });
+    }
+
+    const result = await grantNewKey({
+      userId: request.params.id,
+      ...parsed.data,
+    });
+    if (!result.ok) {
+      const status = result.code === 'USER_NOT_FOUND' || result.code === 'PLAN_NOT_FOUND' ? 404 : 400;
+      return reply.code(status).send(result);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.key.granted',
+        entityType: 'AccessKey',
+        entityId: result.accessKey.id,
+        metadata: {
+          targetUserId: result.user.id,
+          targetEmail: result.user.email,
+          subscriptionId: result.subscription.id,
+          planCode: parsed.data.planCode,
+          dias: parsed.data.dias,
+          sentEmail: parsed.data.sendEmail,
+        },
+        ipAddress: getIp(request),
+      },
+    });
+
+    return reply.code(200).send({
+      ok: true,
+      keyValue: result.accessKey.keyValue,
+      subscriptionId: result.subscription.id,
+      emailSent: result.emailResult?.ok || false,
+      emailMockMode: result.emailResult?.mockMode || false,
+    });
+  });
+
+  // ====================================================
+  // POST /users/:id/send-magic-link — gera + envia novo magic link
+  // ====================================================
+  // Não invalida tokens anteriores (cliente pode ter outros válidos).
+  // Useful quando: cliente perdeu o email, link expirou, quer
+  // redefinir senha pelo fluxo padrão.
+  // ====================================================
+  fastify.post('/users/:id/send-magic-link', ADMIN_GUARDS, async (request, reply) => {
+    const result = await sendNewMagicLink({ userId: request.params.id });
+    if (!result.ok) {
+      const status = result.code === 'USER_NOT_FOUND' ? 404 : 400;
+      return reply.code(status).send(result);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.magic_link.sent',
+        entityType: 'User',
+        entityId: result.user.id,
+        metadata: {
+          targetEmail: result.user.email,
+          emailSent: result.emailResult?.ok || false,
+        },
+        ipAddress: getIp(request),
+      },
+    });
+
+    return reply.code(200).send({
+      ok: true,
+      magicLinkUrl: result.magicLinkUrl,
+      emailSent: result.emailResult?.ok || false,
+      emailMockMode: result.emailResult?.mockMode || false,
+    });
   });
 }
