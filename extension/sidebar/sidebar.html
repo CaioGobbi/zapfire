@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zapfire</title>
+  <link rel="stylesheet" href="sidebar.css" />
+</head>
+<body>
+  <div class="sb">
+    <!-- ====== Header ====== -->
+    <header class="sb-header">
+      <div class="sb-brand">
+        <div class="sb-logo">Z</div>
+        <div>
+          <div class="sb-brand-name">Zapfire</div>
+          <div class="sb-brand-sub" id="chat-name">—</div>
+        </div>
+      </div>
+      <button class="sb-icon-btn" id="btn-close" title="Fechar">×</button>
+    </header>
+
+    <!-- ====== Tabs ====== -->
+    <nav class="sb-tabs">
+      <button class="sb-tab sb-tab--funnel active" data-tab="funnels">
+        <svg class="sb-tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+        <span>Funis</span>
+      </button>
+      <button class="sb-tab sb-tab--text" data-tab="text">
+        <svg class="sb-tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Mensagens</span>
+      </button>
+      <button class="sb-tab sb-tab--audio" data-tab="audio">
+        <svg class="sb-tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        <span>Áudios</span>
+      </button>
+      <button class="sb-tab sb-tab--media" data-tab="media">
+        <svg class="sb-tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        <span>Mídias</span>
+      </button>
+      <button class="sb-tab sb-tab--activity" data-tab="activity">
+        <svg class="sb-tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Ativos<span class="tab-badge" id="activity-badge" hidden>0</span></span>
+      </button>
+    </nav>
+
+    <!-- ====== Busca ====== -->
+    <div class="sb-search">
+      <input type="text" id="search" placeholder="Buscar..." autocomplete="off" />
+    </div>
+
+    <!-- ====== Lista (cards) ====== -->
+    <main class="sb-list" id="list">
+      <!-- renderizado dinamicamente -->
+    </main>
+
+    <!-- ====== Footer ====== -->
+    <footer class="sb-footer">
+      <button class="sb-btn-primary" id="btn-new">Abrir gerenciador</button>
+    </footer>
+
+    <!-- ====== Toast ====== -->
+    <div class="sb-toast" id="toast" hidden></div>
+  </div>
+
+  <script type="module" src="sidebar.js"></script>
+</body>
+</html>

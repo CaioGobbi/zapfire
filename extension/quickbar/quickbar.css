@@ -1,0 +1,131 @@
+/* ============================================================
+   ZAPFIRE — QuickBar
+   Barra horizontal compacta abaixo do input do WA.
+   Itens em ordem: funis → mensagens → áudios → mídias.
+   ============================================================ */
+
+:root {
+  --bg: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-hover: #1c1c1c;
+  --border: #262626;
+  --border-hover: #383838;
+  --text: #f5f5f5;
+  --text-dim: #a3a3a3;
+  --accent: #ff3b30;
+  --accent-glow: rgba(255, 59, 48, 0.15);
+
+  --type-funnel: #ff3b30;
+  --type-funnel-bg: rgba(255, 59, 48, 0.14);
+  --type-text: #38bdf8;
+  --type-text-bg: rgba(56, 189, 248, 0.14);
+  --type-audio: #a855f7;
+  --type-audio-bg: rgba(168, 85, 247, 0.14);
+  --type-media: #f59e0b;
+  --type-media-bg: rgba(245, 158, 11, 0.14);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.qb {
+  width: 100%;
+  height: 100%;
+  border-top: 1px solid var(--border);
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+}
+
+.qb-list {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  flex: 1;
+  height: 100%;
+  align-items: center;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.qb-list::-webkit-scrollbar { height: 4px; }
+.qb-list::-webkit-scrollbar-track { background: transparent; }
+.qb-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 16px;
+  padding: 5px 10px 5px 8px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+  flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  height: 28px;
+}
+.chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-top-color: var(--border-hover);
+  border-right-color: var(--border-hover);
+  border-bottom-color: var(--border-hover);
+}
+.chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Cores por tipo na borda esquerda */
+.chip--funnel { border-left-color: var(--type-funnel); }
+.chip--text   { border-left-color: var(--type-text); }
+.chip--audio  { border-left-color: var(--type-audio); }
+.chip--media  { border-left-color: var(--type-media); }
+
+.chip-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chip-icon svg { display: block; }
+.chip--funnel .chip-icon { color: var(--type-funnel); }
+.chip--text   .chip-icon { color: var(--type-text); }
+.chip--audio  .chip-icon { color: var(--type-audio); }
+.chip--media  .chip-icon { color: var(--type-media); }
+
+.chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.qb-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 0 8px;
+}
+

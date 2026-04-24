@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zapfire — Gerenciador</title>
+  <link rel="stylesheet" href="manager.css" />
+</head>
+<body>
+  <!-- ============== HEADER ============== -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">Z</div>
+      <div>
+        <div class="brand-name">Zapfire</div>
+        <div class="brand-sub">Gerenciador de biblioteca</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn-ghost" id="btn-import">Importar</button>
+      <button class="btn-ghost" id="btn-export">Exportar backup</button>
+    </div>
+  </header>
+
+  <!-- ============== LAYOUT 2 COLUNAS ============== -->
+  <div class="layout">
+    <!-- Coluna esquerda — filtros -->
+    <aside class="sidebar">
+      <div class="filter-group">
+        <div class="filter-label">Biblioteca</div>
+        <button class="filter-item filter-item--all active" data-filter="all">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>Tudo</span>
+        </button>
+        <button class="filter-item filter-item--funnel" data-filter="funnels">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <span>Funis</span>
+        </button>
+        <button class="filter-item filter-item--text" data-filter="text">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Mensagens</span>
+        </button>
+        <button class="filter-item filter-item--audio" data-filter="audio">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          <span>Áudios</span>
+        </button>
+        <button class="filter-item filter-item--media" data-filter="image">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          <span>Imagens</span>
+        </button>
+        <button class="filter-item filter-item--media" data-filter="video">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <span>Vídeos</span>
+        </button>
+        <button class="filter-item filter-item--file" data-filter="file">
+          <svg class="filter-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          <span>Arquivos</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Coluna principal -->
+    <main class="main">
+      <!-- Toolbar: botão contextual (muda conforme a aba ativa) -->
+      <div class="toolbar">
+        <button class="btn-primary" id="btn-create" hidden>+ Novo</button>
+        <input type="text" class="search" id="search" placeholder="Buscar..." autocomplete="off" />
+      </div>
+
+      <!-- Grid de cards -->
+      <section class="grid" id="grid">
+        <!-- renderizado dinamicamente -->
+      </section>
+    </main>
+  </div>
+
+  <!-- ============== MODAIS ============== -->
+
+  <!-- Modal: criar/editar item -->
+  <dialog class="modal" id="modal-item">
+    <form method="dialog" class="modal-form" id="form-item">
+      <header class="modal-header">
+        <h2 id="modal-item-title">Novo item</h2>
+        <button type="button" class="modal-close" data-close="modal-item">×</button>
+      </header>
+
+      <div class="modal-body">
+        <!-- Comum a todos os tipos: título -->
+        <label class="field">
+          <span>Título</span>
+          <input type="text" id="item-title" required maxlength="120" />
+        </label>
+
+        <!-- Específico de texto (mensagem) -->
+        <label class="field" id="field-text">
+          <span>Conteúdo da mensagem</span>
+          <textarea id="item-content-text" rows="8" placeholder="Cole o texto que vai ser enviado..."></textarea>
+        </label>
+
+        <!-- Específico de mídia/arquivo/áudio -->
+        <div class="field" id="field-file">
+          <span>Arquivo</span>
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-icon">⇣</div>
+            <div class="dropzone-text">Clique pra escolher ou arraste aqui</div>
+            <input type="file" id="item-file" hidden />
+          </div>
+          <div class="file-info" id="file-info" hidden></div>
+          <canvas class="waveform" id="waveform" hidden></canvas>
+          <div class="media-preview" id="media-preview"></div>
+        </div>
+
+        <!-- Caption opcional pra mídia (imagem/vídeo/arquivo) -->
+        <label class="field" id="field-caption">
+          <span>Legenda (opcional)</span>
+          <textarea id="item-caption" rows="2" placeholder="Texto que vai junto com a mídia..."></textarea>
+        </label>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-danger" id="btn-delete-item" hidden>Excluir</button>
+        <button type="button" class="btn-ghost" data-close="modal-item">Cancelar</button>
+        <button type="submit" class="btn-primary">Salvar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: criar/editar funil -->
+  <dialog class="modal" id="modal-funnel">
+    <form method="dialog" class="modal-form" id="form-funnel">
+      <header class="modal-header">
+        <h2 id="modal-funnel-title">Novo funil</h2>
+        <button type="button" class="modal-close" data-close="modal-funnel">×</button>
+      </header>
+
+      <div class="modal-body">
+        <label class="field">
+          <span>Nome do funil</span>
+          <input type="text" id="funnel-name" required maxlength="120" />
+        </label>
+
+        <div class="field">
+          <span>Sequência de envio</span>
+          <div class="funnel-steps" id="funnel-steps"><!-- renderizado --></div>
+          <div class="funnel-empty" id="funnel-empty">
+            Nenhum item ainda. Clique em "Adicionar item" pra começar.
+          </div>
+          <button type="button" class="btn-ghost btn-add-step" id="btn-add-step">+ Adicionar item</button>
+        </div>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-danger" id="btn-delete-funnel" hidden>Excluir</button>
+        <button type="button" class="btn-ghost" data-close="modal-funnel">Cancelar</button>
+        <button type="submit" class="btn-primary">Salvar funil</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: adicionar/editar um step do funil -->
+  <dialog class="modal" id="modal-step">
+    <form method="dialog" class="modal-form" id="form-step">
+      <header class="modal-header">
+        <h2 id="modal-step-title">Adicionar item</h2>
+        <button type="button" class="modal-close" data-close="modal-step">×</button>
+      </header>
+
+      <div class="modal-body">
+        <div class="step-tabs" id="step-tabs">
+          <button type="button" class="step-tab active" data-step-tab="text">
+            <span class="menu-dot menu-dot--text"></span>Mensagem
+          </button>
+          <button type="button" class="step-tab" data-step-tab="audio">
+            <span class="menu-dot menu-dot--audio"></span>Áudio
+          </button>
+          <button type="button" class="step-tab" data-step-tab="media">
+            <span class="menu-dot menu-dot--media"></span>Mídia
+          </button>
+          <button type="button" class="step-tab" data-step-tab="file">
+            <span class="menu-dot menu-dot--file"></span>Documento
+          </button>
+        </div>
+
+        <div class="field">
+          <span>Item</span>
+          <div class="custom-select" id="step-item-select">
+            <button type="button" class="cs-trigger" id="cs-trigger">
+              <span class="cs-label cs-label--placeholder" id="cs-label">Selecione um item</span>
+              <span class="cs-chevron">▾</span>
+            </button>
+            <div class="cs-panel" id="cs-panel" hidden>
+              <input type="text" class="cs-search" id="cs-search" placeholder="Buscar item..." autocomplete="off" />
+              <div class="cs-list" id="cs-list"></div>
+            </div>
+            <input type="hidden" id="step-item" />
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Delay antes do envio</span>
+          <div class="step-delay-picker">
+            <label>
+              <input type="number" id="step-delay-min" min="0" max="999" value="0" />
+              <span>min</span>
+            </label>
+            <label>
+              <input type="number" id="step-delay-sec" min="0" max="59" value="0" />
+              <span>seg</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" data-close="modal-step">Cancelar</button>
+        <button type="submit" class="btn-primary">Salvar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Toast -->
+  <div class="toast" id="toast" hidden></div>
+
+  <input type="file" id="import-file" accept="application/json" hidden />
+
+  <!-- Polyfill MediaRecorder com suporte a OGG Opus real
+       (Chrome nativo só exporta WebM, WA exige OGG pro waveform correto) -->
+  <script src="../vendor/opus/OpusMediaRecorder.umd.js"></script>
+  <script type="module" src="manager.js"></script>
+</body>
+</html>

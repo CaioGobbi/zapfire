@@ -1,0 +1,73 @@
+{
+  "manifest_version": 3,
+  "name": "Zapfire — Superpoderes no WhatsApp Web",
+  "short_name": "Zapfire",
+  "version": "0.1.0",
+  "description": "Envie áudios, funis e scripts no WhatsApp Web com 1 clique. Ferramenta oficial da IMP.",
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "https://api.zapfire.com.br/*",
+    "http://localhost:3000/*"
+  ],
+
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["vendor/wppconnect-wa.js", "main-world/injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    },
+    "default_title": "Zapfire"
+  },
+
+  "icons": {
+    "16": "assets/icon-16.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content/injected.js",
+        "sidebar/*",
+        "quickbar/*",
+        "lib/*",
+        "manager/*"
+      ],
+      "matches": ["https://web.whatsapp.com/*"]
+    }
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
+  }
+}

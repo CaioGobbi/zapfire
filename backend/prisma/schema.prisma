@@ -1,0 +1,287 @@
+// ============================================================
+// ZAPFIRE — Schema do banco (PostgreSQL + Prisma)
+// ============================================================
+// Modelagem inspirada no ZapVoice, adaptada pra afiliados X1.
+// Princípio: chave UUID vinculada a 1 número WhatsApp, com até
+// 4 dispositivos simultâneos no mesmo número (igual WA multi-device).
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// USUÁRIO — quem compra e administra a assinatura
+// ------------------------------------------------------------
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String   // bcrypt (SEM passlib, igual você já faz no MétriqAI)
+  fullName      String
+  phone         String?  // WhatsApp de contato (não é o WhatsApp vinculado!)
+  cpfCnpj       String?  @unique
+
+  role          UserRole @default(CUSTOMER)
+  isActive      Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime?
+
+  subscriptions Subscription[]
+  keys          AccessKey[]
+  auditLogs     AuditLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  CUSTOMER   // assinante comum
+  AFFILIATE  // afiliado que revende (se você quiser programa de afiliados depois)
+  ADMIN      // você e o Vinicius
+}
+
+// ------------------------------------------------------------
+// PLANO — catálogo de planos disponíveis
+// ------------------------------------------------------------
+model Plan {
+  id               String   @id @default(uuid())
+  code             String   @unique  // "monthly", "annual", "business_3"
+  name             String              // "Mensal", "Anual 50% OFF"
+  description      String?
+  priceCents       Int                 // em centavos — mesmo padrão do PayT do MétriqAI
+  billingCycle     BillingCycle
+  maxKeys          Int      @default(1)    // quantas chaves vêm nesse plano
+  maxDevicesPerKey Int      @default(4)    // dispositivos simultâneos no mesmo número
+  features         Json                    // feature flags: { funnels: true, triggers: true, ... }
+  isActive         Boolean  @default(true)
+
+  createdAt        DateTime @default(now())
+  subscriptions    Subscription[]
+
+  @@map("plans")
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  LIFETIME
+  PREPAID     // pago sem renovação automática, igual ZapVoice oferece
+}
+
+// ------------------------------------------------------------
+// ASSINATURA — relação user × plano com status de pagamento
+// ------------------------------------------------------------
+model Subscription {
+  id                String             @id @default(uuid())
+  userId            String
+  planId            String
+
+  status            SubscriptionStatus @default(PENDING)
+  gatewayProvider   String             // "pagarme", "eduzz", "guru"
+  gatewaySubId      String?            @unique  // ID da assinatura no gateway
+  gatewayCustomerId String?
+
+  startedAt         DateTime?
+  currentPeriodEnd  DateTime           // data de vencimento — é o que aparece no painel (03/04/2026 no seu print)
+  canceledAt        DateTime?
+  cancelReason      String?
+
+  autoRenew         Boolean            @default(true)
+
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan              Plan               @relation(fields: [planId], references: [id])
+  keys              AccessKey[]
+  payments          Payment[]
+
+  @@index([userId, status])
+  @@index([currentPeriodEnd])  // pra job diário de expiração
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  PENDING    // aguardando pagamento
+  ACTIVE     // plano ativo — libera uso
+  PAST_DUE   // pagamento falhou, em retry
+  CANCELED   // cancelado pelo usuário (ainda ativo até currentPeriodEnd)
+  EXPIRED    // passou do currentPeriodEnd sem renovação
+  BLOCKED    // bloqueado manualmente pelo admin
+}
+
+// ------------------------------------------------------------
+// CHAVE DE ACESSO — o UUID que o usuário cola na extensão
+// ------------------------------------------------------------
+// É O CORAÇÃO DO SISTEMA. Mesmo modelo do ZapVoice:
+// - 1 chave = 1 número WhatsApp
+// - Chave fica "solta" (boundPhone = null) até o primeiro login
+// - No primeiro login, faz o bind e trava pra sempre naquele número
+// - Pode ser reset manualmente pelo admin se o usuário trocar de número
+// ------------------------------------------------------------
+model AccessKey {
+  id             String    @id @default(uuid())
+  userId         String
+  subscriptionId String
+
+  // A chave em si — UUID sem hífens, igual ao print do ZapVoice
+  // Ex: "3b36c0db084640b688a4c4e58d9c7f96"
+  keyValue       String    @unique @db.VarChar(32)
+
+  // Nome amigável que aparece no painel (tipo "Caio Gobbi" no seu print)
+  label          String
+
+  // Estado do bind — null enquanto não vinculou a nenhum número
+  boundPhone     String?   @db.VarChar(20)
+  boundAt        DateTime?
+
+  // Controle de dispositivos — WA multi-device permite 4
+  devices        KeyDevice[]
+
+  status         KeyStatus @default(ACTIVE)
+  blockedReason  String?
+  blockedAt      DateTime?
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastUsedAt     DateTime?
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  validations    ValidationLog[]
+
+  @@index([keyValue])          // lookup principal, acontece toda vez que extensão abre
+  @@index([boundPhone])
+  @@index([userId])
+  @@map("access_keys")
+}
+
+enum KeyStatus {
+  ACTIVE
+  SUSPENDED       // suspensão temporária (ex: acessos simultâneos suspeitos)
+  BLOCKED         // bloqueio permanente (pirataria confirmada)
+  EXPIRED         // assinatura venceu
+}
+
+// ------------------------------------------------------------
+// DISPOSITIVO — cada chrome/pc que tá usando a chave
+// ------------------------------------------------------------
+// Isso é o que limita os 4 devices simultâneos.
+// A extensão gera um deviceId no primeiro uso (salvo em chrome.storage.local)
+// e manda junto a cada validação.
+// ------------------------------------------------------------
+model KeyDevice {
+  id            String    @id @default(uuid())
+  accessKeyId   String
+
+  deviceId      String    // UUID gerado pela extensão
+  userAgent     String?
+  ipAddress     String?
+  chromeVersion String?
+
+  firstSeenAt   DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+
+  accessKey     AccessKey @relation(fields: [accessKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([accessKeyId, deviceId])
+  @@index([lastSeenAt])
+  @@map("key_devices")
+}
+
+// ------------------------------------------------------------
+// LOG DE VALIDAÇÃO — toda chamada de /auth/validate fica aqui
+// ------------------------------------------------------------
+// Essencial pra:
+// - Detectar pirataria (chave sendo usada em IPs muito distintos)
+// - Debug quando cliente reclama "minha chave não funciona"
+// - Métricas de uso pro admin
+// ------------------------------------------------------------
+model ValidationLog {
+  id           String             @id @default(uuid())
+  accessKeyId  String?            // null se chave nem existe
+  keyValueTry  String             // o que o cara tentou (pra detectar força bruta)
+  phoneTry     String?
+  deviceId     String?
+  ipAddress    String
+  userAgent    String?
+  result       ValidationResult
+  reason       String?
+  createdAt    DateTime           @default(now())
+
+  accessKey    AccessKey?         @relation(fields: [accessKeyId], references: [id], onDelete: SetNull)
+
+  @@index([accessKeyId, createdAt])
+  @@index([ipAddress, createdAt]) // pra rate limiting
+  @@map("validation_logs")
+}
+
+enum ValidationResult {
+  SUCCESS
+  INVALID_KEY
+  WRONG_PHONE      // chave boundPhone != phone enviado
+  EXPIRED
+  BLOCKED
+  DEVICE_LIMIT     // tentou usar no 5º dispositivo
+}
+
+// ------------------------------------------------------------
+// PAGAMENTO — cada cobrança/renovação
+// ------------------------------------------------------------
+model Payment {
+  id                String         @id @default(uuid())
+  subscriptionId    String
+
+  gatewayProvider   String
+  gatewayPaymentId  String         @unique
+  amountCents       Int
+  status            PaymentStatus
+  paymentMethod     String?        // "credit_card", "pix", "boleto"
+
+  paidAt            DateTime?
+  createdAt         DateTime       @default(now())
+
+  rawWebhookPayload Json?          // guardar o webhook cru pra debug
+
+  subscription      Subscription   @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CHARGEBACK
+}
+
+// ------------------------------------------------------------
+// AUDITORIA — ações importantes (criar chave, bloquear, resetar bind...)
+// ------------------------------------------------------------
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  // quem fez a ação (null se foi sistema/webhook)
+  action     String   // "key.created", "key.blocked", "bind.reset", ...
+  entityType String?  // "AccessKey", "Subscription", ...
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
