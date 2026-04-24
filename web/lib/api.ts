@@ -37,9 +37,12 @@ export class ApiError extends Error {
 }
 
 async function rawFetch(path: string, opts: ApiOptions): Promise<Response> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
+  // Só seta Content-Type quando realmente tem body — senão Fastify
+  // reclama "Body cannot be empty when content-type is application/json"
+  const hasBody = opts.body !== undefined;
+  if (hasBody) headers['Content-Type'] = 'application/json';
+
   if (opts.auth !== false) {
     const access = useAuthStore.getState().accessToken;
     if (access) headers.Authorization = `Bearer ${access}`;
@@ -48,7 +51,7 @@ async function rawFetch(path: string, opts: ApiOptions): Promise<Response> {
     method: opts.method || 'GET',
     headers,
     credentials: 'include', // envia cookie de refresh quando houver
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body: hasBody ? JSON.stringify(opts.body) : undefined,
   });
 }
 
