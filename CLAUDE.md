@@ -10,6 +10,13 @@
 
 **Posicionamento:** o Zapfire **NÃO se conecta ao WhatsApp via API** (nem oficial, nem Baileys, nem whatsapp-web.js). Ele é uma **extensão Chrome** que injeta código no `web.whatsapp.com` do próprio usuário. A partir do Sprint 3.5 o envio usa diretamente a API interna do WA (Store hijacking via WA-JS + módulos nativos) — **invisível, sem abrir chats, funcional pra múltiplas conversas em paralelo**.
 
+**Arquitetura completa (3 apps):**
+- `/extension` — extensão Chrome
+- `/backend` — API Node/Fastify + PostgreSQL (licenciamento, webhook, painel)
+- `/web` — painel Next.js do assinante (gerenciar chave, ver pagamentos, resetar vínculo)
+
+**Gateway de pagamento:** **Kirvano** (exclusivo). Webhook cria user + subscription + chave automaticamente; cliente recebe email Resend com magic link pra configurar senha no painel.
+
 **Repositório Git:** https://github.com/CaioGobbi/zapfire (privado). Branch principal: `main`.
 
 ## Stack
@@ -17,11 +24,20 @@
 ### Backend (`/backend`)
 - **Runtime:** Node.js 20+ (ES Modules)
 - **Framework HTTP:** Fastify 4
-- **ORM:** Prisma 5
+- **ORM:** Prisma 5 (migrations em `prisma/migrations/`)
 - **Banco:** PostgreSQL 18 (local em `localhost:5432`, db `zapfire`)
-- **Deps principais:** `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit`, `zod`, `bcrypt`, `pino-pretty` (dev)
+- **Deps principais:** `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit`, `@fastify/cookie` v9, `zod`, `bcrypt`, `jsonwebtoken`, `resend`, `pino-pretty` (dev)
 - **Porta:** 3000 em dev
-- **Scripts:** `npm run dev` (watch), `db:push`, `db:seed`, `db:studio`
+- **Scripts:** `npm run dev` (watch), `db:migrate`, `db:seed`, `db:studio`
+
+### Painel Web (`/web`) — Sprint 4
+- **Framework:** Next.js 14.2 (App Router) + TypeScript + Tailwind
+- **UI:** shadcn/ui (button, card, dialog, input, table, tabs, skeleton, sonner…)
+- **State:** `zustand` (access token em memória, **nunca** em localStorage)
+- **Ícones:** `lucide-react` 0.469
+- **Porta:** 3001 em dev (`next dev -p 3001`)
+- **Deploy alvo:** Vercel (Sprint 7)
+- **Auth:** JWT access 15min (em memória) + refresh opaco 30d (cookie HttpOnly `zf_refresh`, SameSite=Lax, path `/api/v1/account`). Rotação a cada `/refresh`. `bootstrapSession()` no mount tenta refresh pra recuperar a sessão pós-reload
 
 ### Extensão (`/extension`)
 - **Manifesto:** V3, múltiplos content_scripts (ISOLATED + MAIN worlds)
@@ -45,35 +61,54 @@
 
 Replica o modelo do ZapVoice:
 
-1. Usuário paga via gateway (Pagar.me, Eduzz, Guru) → webhook cria `AccessKey` com UUID hex de 32 chars (sem hífens)
-2. Usuário recebe chave por email, instala a extensão, cola a chave no popup
-3. Extensão lê o número do WhatsApp Web via `localStorage['last-wid-md']` (formato `554187056242:94@c.us`, extraímos `554187056242`)
-4. Primeiro uso: backend faz **BIND** — `access_keys.boundPhone = phone`. A partir daí, a chave SÓ funciona naquele número
-5. Toda revalidação compara número atual com `boundPhone`. Divergência → bloqueia
-6. Até 4 dispositivos simultâneos no mesmo número (campo `plan.maxDevicesPerKey`)
+1. Usuário paga na **Kirvano** → webhook `POST /api/v1/webhooks/kirvano` cria User + Subscription + `AccessKey` (UUID hex 32 chars) + `EmailToken` MAGIC_LINK
+2. Resend envia email com chave + link pro painel (`/primeiro-acesso?token=…`). Cliente configura senha via magic link, já cai logado no painel (sessão JWT).
+3. Cliente instala a extensão, cola a chave no popup
+4. Extensão lê o número do WhatsApp Web via `localStorage['last-wid-md']` (formato `554187056242:94@c.us`, extraímos `554187056242`)
+5. Primeiro uso: backend faz **BIND** — `access_keys.boundPhone = phone`. A partir daí, a chave SÓ funciona naquele número
+6. Toda revalidação compara número atual com `boundPhone`. Divergência → bloqueia
+7. Até 4 dispositivos simultâneos no mesmo número (campo `plan.maxDevicesPerKey`)
+8. Cliente pode gerenciar no painel: ver dispositivos, **resetar bind 1×/mês**, ver pagamentos e histórico de validações
+9. Renovação via Kirvano → webhook `SUBSCRIPTION_RENEWED` estende `currentPeriodEnd`. Se falhar → entra em **período de graça de 3 dias** (extensão funciona com warning); após o grace → `EXPIRED`, bloqueia.
 
 **Importante:** toda validação crítica é SERVER-SIDE. O client é burro, só pergunta "posso?" pro backend. Qualquer check no client é acessório.
 
 ### Endpoints atuais (prefixo `/api/v1`)
 
-- `POST /auth/validate` — payload: `{ keyValue, phone, deviceId, chromeVersion? }`. Valida, faz bind se for primeiro uso, registra device.
+**Extensão (chave ↔ validate):**
+- `POST /auth/validate` — `{ keyValue, phone, deviceId, chromeVersion? }`. Valida, faz bind se for primeiro uso, registra device. Retorna `warning: "GRACE_PERIOD"` + `daysLeft` + `graceEndsAt` quando a assinatura venceu faz ≤3 dias. Passado o grace, marca EXPIRED (lazy) e nega. Rate 30/min/IP.
 - `GET /auth/heartbeat` — header `X-Zapfire-Key`. Checagem leve, usada periodicamente pela extensão.
-- `GET /health` — healthcheck pra monitoramento.
 
-Rate limit: 30 req/min por IP em `/auth/validate`.
+**Webhook Kirvano (Sprint 4 ETAPA 3):**
+- `POST /webhooks/kirvano` — header `X-Kirvano-Token`. Trata: `SALE_APPROVED`, `SUBSCRIPTION_RENEWED`, `SUBSCRIPTION_CANCELED`, `SUBSCRIPTION_EXPIRED`, `SALE_REFUNDED`, `SALE_CHARGEBACK`, `PIX_*`. Idempotência via `Payment.kirvanoSaleId`. Token errado/ausente → 401, qualquer outro erro → 200 (evita retry infinito da Kirvano). Rate 120/min/IP. Ver `docs/kirvano-webhook.md`.
 
-## Modelagem do Banco (8 tabelas)
+**Painel web (Sprint 4 ETAPA 4) — prefixo `/api/v1/account`:**
+
+| Público | Autenticado (Bearer JWT) |
+|---|---|
+| `POST /magic-link-request` (5/min/IP, anti-enumeration) | `GET /me` |
+| `POST /consume-magic-link` — seta senha e já loga | `GET /subscription` (inclui info de grace) |
+| `POST /login` — 5/min/IP + 10/h/email | `GET /keys` · `GET /keys/:id/devices` |
+| `POST /refresh` — cookie-only, rotaciona | `POST /keys/:id/reset-bind` — 1×/mês |
+| `POST /logout` — revoga refresh | `GET /payments` (cursor) · `GET /validations` |
+
+**Outros:**
+- `GET /health` — healthcheck.
+
+## Modelagem do Banco (10 tabelas)
 
 Definida em `backend/prisma/schema.prisma`. Resumo:
 
-- **users** — assinantes + admins (roles: CUSTOMER, AFFILIATE, ADMIN). bcrypt direto, sem passlib.
-- **plans** — catálogo (code, priceCents em centavos, billingCycle, maxKeys, maxDevicesPerKey, features JSON)
-- **subscriptions** — relação user × plan + status de pagamento. `currentPeriodEnd` é a data de vencimento
-- **access_keys** — chaves UUID hex 32 chars. `boundPhone` (null até primeiro login) + `boundAt` + `status` (ACTIVE/SUSPENDED/BLOCKED/EXPIRED)
-- **key_devices** — dispositivos ativos por chave (limite de 4 no plano padrão)
-- **validation_logs** — cada chamada ao `/validate` fica logada (resultado, phone tentado, IP, UA)
-- **payments** — cada cobrança/renovação
-- **audit_logs** — ações importantes (key.bound, bind.reset, key.blocked, etc.)
+- **users** — assinantes + admins (roles: CUSTOMER, AFFILIATE, ADMIN). bcrypt direto. Campos Sprint 4: `emailVerified`, `passwordSetAt`
+- **plans** — catálogo. Sprint 4 populou: `monthly_v1` (R$47) e `annual_v1` (R$395). `monthly_x1` legado ainda existe
+- **subscriptions** — relação user × plan + status. Sprint 4: `kirvanoSaleId`, `kirvanoStatus`, `gracePeriodEndsAt`, `gatewayProvider: "kirvano"`
+- **access_keys** — UUID hex 32 chars. Sprint 4: `resetCount30d`, `resetCount30dResetAt`, `lastResetAt` (self-service reset 1×/mês)
+- **key_devices** — dispositivos ativos (limite 4)
+- **validation_logs** — cada `/auth/validate` logada
+- **payments** — cada cobrança/renovação. Sprint 4: `kirvanoSaleId @unique` (idempotência), `paidAmountCents` (rename de `amountCents` via `@map`), `nfIssued`, `nfIssuedAt`
+- **audit_logs** — `key.bound`, `bind.reset`, `subscription.created`, `subscription.renewed`, `key.reset_self`, `key.reset_blocked`, `webhook.error`, `user.password_set`…
+- **email_tokens** (Sprint 4) — `MAGIC_LINK` | `PASSWORD_RESET`. Guarda só `tokenHash` (SHA-256). Expira em 7d
+- **refresh_tokens** (Sprint 4) — sessões do painel. 30d. Guarda só hash, revoga + rotaciona a cada `/refresh`
 
 Valores monetários SEMPRE em centavos (`Int`), mesmo padrão do PayT usado no MétriqAI.
 
@@ -214,6 +249,37 @@ window.postMessage({
 - **Áudio invisível como PTT**: conversão MP3/WAV → OGG Opus real (via opus-media-recorder) no upload no manager, salva como OGG no IndexedDB; envio usa `isPtt: true` → WA renderiza com waveform detalhado no remetente E destinatário
 - **Paralelismo real**: múltiplos funis pra conversas diferentes enviando ao mesmo tempo, sem abrir chats, sem UI visível mudar
 
+### Sprint 4 — ETAPAs 1–6 concluídas (ciclo comercial + painel)
+
+**Backend (ETAPAs 1–5):**
+- **Schema**: 2 tabelas novas (`email_tokens`, `refresh_tokens`), novos campos de integração Kirvano e grace period, 2 planos comerciais (`monthly_v1`, `annual_v1`). Migration `sprint4_auth_payments` aplicada
+- **Utilities**: `lib/tokens.js` (SHA-256 de plaintext, nunca armazena cru), `lib/jwt.js` (HS256, 15min, aud/iss estritos), `lib/kirvanoParser.js` (BRL→centavos, SP UTC-3→UTC, event map, resolvePlanCode), `lib/resend.js` (modo **mock** loga no console se `RESEND_API_KEY` vazio — perfeito pra dev)
+- **Webhook Kirvano**: `services/kirvanoService.js` + `routes/webhooks.js`. Idempotência por `kirvanoSaleId`, sempre 200 após auth (evita retry loop). Emails HTML inline-styled de boas-vindas/renovação/cancelamento/chargeback
+- **Auth painel**: `middleware/authGuard.js` + `routes/account.js` com 11 endpoints. Access JWT 15min, refresh opaco 30d em cookie HttpOnly `zf_refresh` (SameSite=Lax, path `/api/v1/account`). Rate limit por IP + por email no `/login` (10/hora). Anti-enumeration em `/magic-link-request`. Bcrypt fake hash pra timing-constant
+- **keyService ampliado (SEM reescrever)**: `validateKey` agora devolve `warning: "GRACE_PERIOD"` + `daysLeft` + `graceEndsAt` quando vencida ≤3d; marca `EXPIRED` (lazy) passado o grace. Novo método `resetBind(keyId, userId)` com limite 1 reset a cada 30d (rolling window), ownership check, remove todos os devices
+
+**Painel web (ETAPA 6) — Next.js 14 em `/web`:**
+- **Infra auth client**: `lib/api.ts` (fetch com auto-refresh em 401, singleton de refresh pra evitar race), `lib/authStore.ts` (zustand em memória), `lib/auth.ts` (login/consume/logout/bootstrapSession)
+- **Layouts**: `(public)` centralizado com marca Z + `(app)` com sidebar 220px (Dashboard/Assinatura/Dispositivos/Histórico)
+- **Páginas**:
+  - `/login` — email+senha, trata `PASSWORD_NOT_SET` (usuário ainda não consumiu magic link) com mensagem específica
+  - `/primeiro-acesso` — 2 modos: com `?token=` configura senha e loga; sem token, form de pedir novo link
+  - `/dashboard` — KeyCard (chave em grupos de 8 hex, botão copy), SubscriptionCard, BindCard (número mascarado `+55 (11) *****-4321`), banners contextuais (grace/expired/blocked)
+  - `/assinatura` — plano + preço + próxima cobrança + botão "Gerenciar na Kirvano" (link externo) + último pagamento
+  - `/dispositivos` — número vinculado + tabela de dispositivos + modal de confirmação do reset-bind com regras
+  - `/historico` — tabs Pagamentos (paginado por cursor) + Validações (50 recentes, útil pro user detectar pirataria)
+  - `/not-found` — 404 customizada com marca
+- **Estética**: paleta cypherpunk mapeada em HSL pros tokens shadcn (`--background: 0 0% 4%`, `--primary: 4 100% 59%`…). Cores por tipo expostas como `zf-accent`, `zf-type-text`, `zf-type-audio`, etc
+- **Bugs resolvidos durante a build**:
+  - `@fastify/cookie` v10 incompatível com Fastify 4 → v9
+  - lucide-react 1.9.x (antigo) → 0.469 (moderno com LayoutDashboard, CreditCard, etc)
+  - API wrapper mandava `Content-Type: application/json` mesmo sem body → Fastify rejeitava `POST /refresh` com `FST_ERR_CTP_EMPTY_JSON_BODY` → só seta CT quando há body
+  - Cookie `SameSite=Strict` bloqueando bootstrap → `Lax`
+
+**Pendente do Sprint 4:**
+- **ETAPA 7** — banners de grace period dentro da **extensão** (sidebar, popup) + gate de envio client-side (aprovado como opção 2)
+- **ETAPA 8** — `docs/kirvano-webhook.md` ✅ criado; `docs/email-templates.md` pendente
+
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
 ### Sprint 1-2
@@ -245,18 +311,42 @@ window.postMessage({
 - **Limpeza de boolean prefix** dos data-id do WA (`true_` / `false_`) quando captura via DOM — prefixo muda quando chat recebe mensagem
 - **DOM sender mantido como fallback** em `lib/sender.js` pra casos sem JID (ex: usuário tenta Enviar antes do WPP carregar)
 
+### Sprint 4 (ciclo comercial + painel)
+- **Gateway único = Kirvano** (não Pagar.me/Eduzz/Guru como cogitado antes). Exclusividade simplifica webhook + evita abstrações prematuras
+- **Preços Sprint 4**: Mensal R$47 (`monthly_v1`) + Anual R$395 (`annual_v1`, ≈30% off sobre 12× mensal)
+- **Email = Resend**. Modo mock automático quando `RESEND_API_KEY` vazio — loga email no console e retorna `{ok: true, mockMode: true}`. Zero mudança no caller pra dev vs prod
+- **Magic link antes de senha**: cliente NÃO tem senha até consumir o link. Usuário novo = `passwordSetAt: null`. Login direto com senha retorna `PASSWORD_NOT_SET` nesse caso. Email `MAGIC_LINK` expira em 7d. Só o **hash SHA-256** vai pro banco; plaintext só vive no email e no URL
+- **Sessão híbrida**: access JWT 15min (stateless, body da response, memória do cliente) + refresh opaco 30d (stateful, cookie HttpOnly `zf_refresh`, hash no banco, rotaciona a cada /refresh). `bootstrapSession()` no mount do painel troca cookie por access
+- **Cookie `SameSite=Lax`** (não Strict). Strict bloqueava o bootstrap em alguns fluxos de F5 mesmo sendo same-site (`:3001` ↔ `:3000`)
+- **CORS no backend com callback de origin** + `credentials: true`. Aceita `chrome-extension://*` + `PANEL_ORIGINS` (default `PANEL_BASE_URL`). Echo do origin específico (wildcard não funciona com credentials)
+- **Webhook responde SEMPRE 200 após auth** (exceto token errado → 401). Erros internos vão pro `audit_logs` com action `webhook.error`. Motivo: Kirvano retenta em 5xx — retry loop sobrecarrega e mascara o problema
+- **Idempotência do webhook** via `Payment.kirvanoSaleId @unique`. Mesmo saleId 2× é no-op
+- **Grace period = 3 dias fixos.** Configurado em `keyService.js` (`GRACE_DAYS = 3`). Dentro do grace: `/validate` retorna SUCCESS com `warning: "GRACE_PERIOD"`. Passado: marca EXPIRED (lazy) e nega
+- **Reset bind self-service = 1×/30d (rolling window).** Campo `resetCount30dResetAt` zera quando passa de 30d da última janela. Limite excedido → `RESET_LIMIT` (cliente contata suporte — admin resolve manual)
+- **Mock bcrypt em login sem user**: compara hash fake pra tempo-constante (evita timing attack de enumeration). Mesmo sem user, a request demora igual
+- **Rate limit no /login**: 5/min/IP (via `@fastify/rate-limit` config) + 10/hora/email (in-memory Map). Suficiente pra single-server; se virar multi-server, migrar pra Redis
+- **Access token NUNCA em localStorage** — só em memória (zustand). Trade-off: F5 precisa chamar /refresh. Mitigação: `bootstrapSession()` faz isso transparentemente no mount
+- **shadcn tokens mapeados pra HSL da paleta Zapfire** em `web/app/globals.css`. Cores por tipo viram utility `bg-zf-accent`, `text-zf-type-text`, etc (Tailwind config em `web/tailwind.config.ts`)
+- **`@fastify/cookie` v9** (v10+ requer Fastify 5). Mantém compat com nossa Fastify 4.29
+- **Painel em porta 3001** (não 3000) pra não conflitar com o backend. Script é `next dev -p 3001`
+- **`.env.example` sempre com placeholders** — nunca commitar token real. `cookies.txt` (residue de curl -c/-b) no `.gitignore`
+
 ## Próximos Sprints
 
-- **Sprint 4 (próximo):** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
-- **Sprint 5:** Webhook Pagar.me + painel web do assinante (Next.js, reaproveitar stack MétriqAI)
-- **Sprint 6:** Backoffice admin (ver chaves, bindar/desbindar, ver logs, promover usuário)
-- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão, deploy Render pro backend, publicação Chrome Web Store
+- **Sprint 4 — pendente:** ETAPA 7 (banners de grace na extensão + gate de envio client-side) + ETAPA 8 final (docs/email-templates.md)
+- **Sprint 5:** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
+- **Sprint 6:** Backoffice admin (ver chaves, bindar/desbindar, ver logs, promover usuário, liberar novo reset-bind pra clientes que já usaram o do mês)
+- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão, deploy Render pro backend + Vercel pro painel, publicação Chrome Web Store
 
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
 - Fallback DOM em `lib/sender.js` ainda existe — pode ser removido quando envio via API for 100% estável
 - Conversão OGG bloqueia UI do manager durante o upload — poderia ser async/progress
 - `tags` e `folder` ainda no schema do IndexedDB mas sem UI — decidir entre remover do storage ou reintroduzir UI
+- Rate limit por email no /login é in-memory Map — vira Redis quando for multi-server
+- Kirvano `offer_id` → plano ainda é fallback por `charge_frequency`. Sprint 5/6: preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `lib/kirvanoParser.js` com os IDs reais da Kirvano
+- Backend tem 6 vulnerabilidades transitivas moderate/high no `resend`. Revisar antes de prod
+- `audit_logs.metadata` cresce indefinidamente — precisa de política de retenção ou tabela particionada no futuro
 
 ## Estrutura Atual do Projeto
 
@@ -264,25 +354,71 @@ window.postMessage({
 zapfire/
 ├── CLAUDE.md                             ← este arquivo
 ├── README.md
-├── .gitignore
-├── backend/
+├── .gitignore                            ← ignora .env, cookies.txt, node_modules, .crx, .zip
+├── docs/
+│   └── kirvano-webhook.md                ← schema + payloads de exemplo + how-to-test
+│   └── email-templates.md                ← pendente (ETAPA 8)
+│
+├── backend/                              ← Node.js + Fastify + Prisma + PostgreSQL
 │   ├── .env                              ← gitignored (secrets)
-│   ├── .env.example
+│   ├── .env.example                      ← placeholders PUBLIC-SAFE
 │   ├── package.json
 │   ├── prisma/
-│   │   ├── schema.prisma
-│   │   └── seed.js
+│   │   ├── schema.prisma                 ← 10 tabelas + 3 enums novos do Sprint 4
+│   │   ├── seed.js                       ← plans monthly_x1, monthly_v1, annual_v1
+│   │   └── migrations/
+│   │       └── 20260424_sprint4_auth_payments/
 │   └── src/
-│       ├── server.js                     ← entrypoint Fastify
-│       ├── lib/prisma.js                 ← singleton Prisma
-│       ├── routes/auth.js                ← /auth/validate, /auth/heartbeat
-│       └── services/keyService.js        ← validateKey(), resetKeyBind()
-└── extension/
-    ├── manifest.json                     ← Manifest V3, múltiplos content_scripts
-    ├── assets/
-    │   ├── icon-16.png
-    │   ├── icon-48.png
-    │   └── icon-128.png
+│       ├── server.js                     ← registra CORS c/ callback, @fastify/cookie, routes
+│       ├── lib/
+│       │   ├── prisma.js                 ← singleton Prisma
+│       │   ├── jwt.js                    ← sign/verify access (15min HS256) + refresh opaco
+│       │   ├── tokens.js                 ← generateSecureToken + hashToken (SHA-256)
+│       │   ├── resend.js                 ← sendEmail com mock mode automático
+│       │   └── kirvanoParser.js          ← parseBRL, parseKirvanoDate, mapEvent, resolvePlan
+│       ├── middleware/
+│       │   └── authGuard.js              ← preHandler Bearer JWT pra /account/*
+│       ├── routes/
+│       │   ├── auth.js                   ← /auth/validate, /auth/heartbeat
+│       │   ├── webhooks.js               ← /webhooks/kirvano (token + Zod + dispatch)
+│       │   └── account.js                ← 11 endpoints do painel
+│       └── services/
+│           ├── keyService.js             ← validateKey (com grace), resetBind (self-service), resetKeyBind (admin)
+│           └── kirvanoService.js         ← handlers por evento (SALE_*, SUBSCRIPTION_*, etc)
+│
+├── web/                                  ← Next.js 14 App Router (painel do assinante)
+│   ├── .env.example                      ← NEXT_PUBLIC_API_URL
+│   ├── package.json                      ← "dev": "next dev -p 3001"
+│   ├── components.json                   ← config shadcn
+│   ├── tailwind.config.ts                ← palette cypherpunk (zf-accent, zf-type-*)
+│   ├── app/
+│   │   ├── layout.tsx                    ← RootLayout + AuthProvider + Toaster
+│   │   ├── page.tsx                      ← / redireciona pra /dashboard ou /login
+│   │   ├── not-found.tsx                 ← 404 branded
+│   │   ├── globals.css                   ← tokens shadcn em HSL
+│   │   ├── (public)/                     ← sem auth
+│   │   │   ├── layout.tsx                ← centralizado + marca Z
+│   │   │   ├── login/page.tsx
+│   │   │   └── primeiro-acesso/page.tsx  ← 2 modos (com/sem ?token=)
+│   │   └── (app)/                        ← requer JWT (gate via bootstrapSession)
+│   │       ├── layout.tsx                ← sidebar 220px + main
+│   │       ├── dashboard/page.tsx        ← chave + subscription + bind + banners
+│   │       ├── assinatura/page.tsx       ← plano + último pagamento + link Kirvano
+│   │       ├── dispositivos/page.tsx     ← devices + modal reset-bind
+│   │       └── historico/page.tsx        ← tabs Pagamentos + Validações
+│   ├── components/
+│   │   ├── AuthProvider.tsx              ← chama bootstrapSession no mount
+│   │   └── ui/                           ← shadcn: button, card, input, dialog, badge, table, tabs, skeleton, sonner, …
+│   └── lib/
+│       ├── api.ts                        ← fetch wrapper + auto-refresh em 401
+│       ├── authStore.ts                  ← zustand (access em memória!)
+│       ├── auth.ts                       ← login/consume/logout/bootstrap
+│       ├── format.ts                     ← BRL, data, maskPhone, formatKey
+│       └── utils.ts                      ← cn() helper shadcn
+│
+└── extension/                            ← Chrome Manifest V3
+    ├── manifest.json                     ← múltiplos content_scripts (ISOLATED + MAIN)
+    ├── assets/ (ícones 16/48/128)
     ├── background/
     │   └── service-worker.js             ← auth, heartbeat, rota ZF_OPEN_MANAGER
     ├── content/
@@ -293,28 +429,11 @@ zapfire/
     │   ├── storage.js                    ← IndexedDB wrapper
     │   ├── sender.js                     ← envio via DOM (fallback)
     │   └── funnel-engine.js              ← executor de funis paralelos
-    ├── sidebar/
-    │   ├── sidebar.html                  ← 5 tabs com ícones SVG
-    │   ├── sidebar.css                   ← dark cypherpunk + cores por tipo
-    │   └── sidebar.js                    ← cards colapsados, activity Map
-    ├── quickbar/
-    │   ├── quickbar.html                 ← barra horizontal com chips
-    │   ├── quickbar.css
-    │   └── quickbar.js                   ← injetada dentro do footer do WA
-    ├── manager/
-    │   ├── manager.html                  ← dashboard + list view + modais
-    │   ├── manager.css
-    │   └── manager.js                    ← CRUD, conversão OGG, editor de funil tabbed
-    ├── popup/
-    │   ├── popup.html
-    │   └── popup.js                      ← login + botão Abrir gerenciador
-    └── vendor/
-        ├── wppconnect-wa.js              ← WA-JS bundle (~500KB)
-        └── opus/
-            ├── OpusMediaRecorder.umd.js
-            ├── encoderWorker.umd.js
-            ├── OggOpusEncoder.wasm
-            └── WebMOpusEncoder.wasm
+    ├── sidebar/                          ← iframe (320px fixed à direita)
+    ├── quickbar/                         ← iframe dentro do <footer> do WA
+    ├── manager/                          ← aba dedicada full-screen
+    ├── popup/                            ← login/logout + Abrir gerenciador
+    └── vendor/                           ← WA-JS bundle + opus-media-recorder WASM
 ```
 
 ## Convenções de Código
