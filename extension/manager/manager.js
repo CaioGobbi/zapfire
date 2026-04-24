@@ -11,6 +11,7 @@
 // ============================================================
 
 import * as storage from '../lib/storage.js';
+import * as backup from '../lib/backup.js';
 import { PANEL_URL } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -28,6 +29,9 @@ const state = {
   // Cache de items pro pool do funnel editor
   poolItems: [],
   poolSearch: '',
+  // Modal de backup
+  backupFile: null,        // File atualmente selecionado pra import
+  backupPreview: null,     // Resultado de previewBackup() pro file atual
 };
 
 // Quais types do storage cada filtro mostra
@@ -939,35 +943,240 @@ async function confirmDeleteFunnel(funnel) {
 }
 
 // ============================================================
-// EXPORT / IMPORT
+// BACKUP / RESTAURAÇÃO (formato ZapVoice 3.0.0)
 // ============================================================
+// Modal único com 2 seções: exportar (1 botão direto) e importar
+// (file picker → preview → opções → executa → mostra report).
 
-async function doExport() {
+const BACKUP_CATEGORY_LABELS = {
+  funnels: 'Funis',
+  messages: 'Mensagens',
+  audios: 'Áudios',
+  medias: 'Mídias',
+  docs: 'Documentos',
+};
+const BACKUP_CATEGORY_CSS = {
+  funnels: 'funnel',
+  messages: 'text',
+  audios: 'audio',
+  medias: 'media',
+  docs: 'file',
+};
+
+function openBackupModal() {
+  // Reset do estado a cada abertura
+  state.backupFile = null;
+  state.backupPreview = null;
+
+  $('backup-file').value = '';
+  $('backup-filename').hidden = true;
+  $('backup-filename').textContent = '';
+  $('backup-preview').hidden = true;
+  $('backup-report').hidden = true;
+  $('backup-warnings').hidden = true;
+  $('btn-do-import').disabled = true;
+
+  // Reset opções pro default
+  const skipRadio = document.querySelector('input[name="bk-conflict"][value="skip"]');
+  if (skipRadio) skipRadio.checked = true;
+  $('bk-regenerate-ids').checked = false;
+
+  $('modal-backup').showModal();
+}
+
+async function doExportBackup() {
+  const btn = $('btn-do-export');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Gerando...';
   try {
-    const dump = await storage.exportAll();
-    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
+    const blob = await backup.exportBackup();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `zapfire-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = backup.suggestBackupFilename();
     a.click();
     URL.revokeObjectURL(url);
-    toast('Backup exportado', 'success');
+    toast('Backup baixado', 'success');
   } catch (err) {
+    console.error('[backup:export]', err);
     toast('Erro no export: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 }
 
-async function doImport(file) {
+async function handleBackupFileSelected(file) {
   if (!file) return;
+
+  state.backupFile = file;
+  $('backup-filename').textContent = file.name;
+  $('backup-filename').hidden = false;
+  $('backup-report').hidden = true; // limpa report se trocou de arquivo
+
   try {
-    const text = await file.text();
-    const data = JSON.parse(text);
-    const result = await storage.importAll(data);
-    toast(`${result.importedItems} itens, ${result.importedFunnels} funis importados`, 'success');
+    const preview = await backup.previewBackup(file);
+    state.backupPreview = preview;
+    renderBackupPreview(preview);
+    $('backup-preview').hidden = false;
+    $('btn-do-import').disabled = false;
+  } catch (err) {
+    console.error('[backup:preview]', err);
+    state.backupFile = null;
+    state.backupPreview = null;
+    $('backup-preview').hidden = true;
+    $('btn-do-import').disabled = true;
+    toast('Arquivo inválido: ' + err.message, 'error');
+  }
+}
+
+function renderBackupPreview(preview) {
+  // Stats por categoria
+  const stats = $('backup-stats');
+  const total =
+    preview.counts.funnels +
+    preview.counts.messages +
+    preview.counts.audios +
+    preview.counts.medias +
+    preview.counts.docs;
+
+  if (total === 0) {
+    stats.innerHTML = `<div class="bk-stat" style="grid-column:1/-1;text-align:center;">
+      <div class="bk-stat-label">Backup vazio (nenhum item ou funil encontrado)</div>
+    </div>`;
+  } else {
+    const order = ['funnels', 'messages', 'audios', 'medias', 'docs'];
+    stats.innerHTML = order.map((key) => {
+      const count = preview.counts[key];
+      const cssMod = BACKUP_CATEGORY_CSS[key];
+      const label = BACKUP_CATEGORY_LABELS[key];
+      return `
+        <div class="bk-stat bk-stat--${cssMod}">
+          <div class="bk-stat-value">${count}</div>
+          <div class="bk-stat-label">${label}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Avisos
+  const warnings = [];
+  if (preview.versionMismatch) {
+    warnings.push(`⚠ Versão do backup é ${escapeHTML(preview.version)}, esperada 3.x.x. Vou tentar importar mesmo assim — campos novos podem não ser reconhecidos.`);
+  }
+  if (preview.orphans.length > 0) {
+    warnings.push(`⚠ ${preview.orphans.length} entrada(s) sem conteúdo correspondente em objectsList — vão ser ignoradas no import.`);
+  }
+  const warnEl = $('backup-warnings');
+  if (warnings.length) {
+    warnEl.innerHTML = warnings.map((w) => `<div>${w}</div>`).join('');
+    warnEl.hidden = false;
+  } else {
+    warnEl.hidden = true;
+  }
+}
+
+async function doImportBackup() {
+  if (!state.backupFile) return;
+
+  const conflictMode = document.querySelector('input[name="bk-conflict"]:checked')?.value || 'skip';
+  const regenerateIds = $('bk-regenerate-ids').checked;
+
+  const btn = $('btn-do-import');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Importando...';
+
+  try {
+    const report = await backup.importBackup(state.backupFile, { conflictMode, regenerateIds });
+    renderBackupReport(report);
+    $('backup-report').hidden = false;
+
+    const totalImported =
+      report.imported.funnels +
+      report.imported.messages +
+      report.imported.audios +
+      report.imported.medias +
+      report.imported.docs;
+
+    if (totalImported > 0) {
+      toast(`Importação concluída — ${totalImported} item(ns) adicionado(s)`, 'success');
+    } else {
+      toast('Nenhum item novo importado (tudo pulado ou órfão)', 'warning');
+    }
+
+    // Atualiza a lista de fundo (próximo render reflete os novos items)
     renderList();
   } catch (err) {
+    console.error('[backup:import]', err);
     toast('Erro no import: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+
+function renderBackupReport(report) {
+  const order = ['funnels', 'messages', 'audios', 'medias', 'docs'];
+  const tbody = $('backup-report-body');
+  tbody.innerHTML = order.map((key) => {
+    const imp = report.imported[key];
+    const skp = report.skipped[key];
+    const impCls = imp > 0 ? 'bk-num--ok' : 'bk-num--zero';
+    const skpCls = skp > 0 ? '' : 'bk-num--zero';
+    return `
+      <tr>
+        <td>${BACKUP_CATEGORY_LABELS[key]}</td>
+        <td class="bk-num ${impCls}">${imp}</td>
+        <td class="bk-num ${skpCls}">${skp}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const extras = $('backup-report-extras');
+  const pills = [];
+  if (report.orphans.length > 0) {
+    pills.push(`<div class="bk-report-pill bk-report-pill--warning">${report.orphans.length} entrada(s) órfã(s) — sem conteúdo correspondente em objectsList</div>`);
+  }
+  if (report.errors.length > 0) {
+    const sample = report.errors.slice(0, 3).map(e =>
+      `${e.kind || 'item'}${e.id ? ` (${e.id.slice(0, 8)}...)` : ''}: ${e.message}`
+    ).join(' · ');
+    const more = report.errors.length > 3 ? ` e +${report.errors.length - 3}` : '';
+    pills.push(`<div class="bk-report-pill bk-report-pill--error">${report.errors.length} erro(s)${more}: ${escapeHTML(sample)}</div>`);
+  }
+  extras.innerHTML = pills.join('');
+}
+
+async function doClearAll() {
+  try {
+    const [items, funnels] = await Promise.all([storage.listItems(), storage.listFunnels()]);
+    const total = items.length + funnels.length;
+
+    if (total === 0) {
+      toast('Nada pra apagar — biblioteca já está vazia', 'info');
+      return;
+    }
+
+    const first = confirm(
+      `Apagar TUDO?\n\n` +
+      `Isso vai remover permanentemente:\n` +
+      `  • ${items.length} item(ns) (mensagens, áudios, mídias, arquivos)\n` +
+      `  • ${funnels.length} funil(is)\n\n` +
+      `Essa ação NÃO pode ser desfeita.\n\n` +
+      `Dica: exporte um backup antes, se quiser poder restaurar depois.`
+    );
+    if (!first) return;
+
+    const second = confirm('Tem certeza absoluta? Última chance antes de apagar tudo.');
+    if (!second) return;
+
+    const result = await storage.clearAll();
+    toast(`Apagados ${result.clearedItems} itens e ${result.clearedFunnels} funis`, 'success');
+    renderList();
+  } catch (err) {
+    toast('Erro ao apagar: ' + err.message, 'error');
   }
 }
 
@@ -1115,16 +1324,22 @@ function init() {
     if (e.target.files[0]) handleFileSelected(e.target.files[0]);
   });
 
-  // Export/Import
-  $('btn-export').addEventListener('click', doExport);
-  $('btn-import').addEventListener('click', () => $('import-file').click());
+  // Backup / Restauração — modal único com export + import
+  $('btn-backup').addEventListener('click', openBackupModal);
+  $('btn-do-export').addEventListener('click', doExportBackup);
+  $('btn-pick-backup').addEventListener('click', () => $('backup-file').click());
+  $('backup-file').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (f) handleBackupFileSelected(f);
+  });
+  $('btn-do-import').addEventListener('click', doImportBackup);
+
+  // Apagar tudo (separado do backup, ação destrutiva direta)
+  $('btn-clear-all').addEventListener('click', doClearAll);
 
   // Abrir painel do assinante em nova aba (URL vem de config.js — build-replaced)
   $('btn-panel').addEventListener('click', () => {
     window.open(`${PANEL_URL}/dashboard`, '_blank', 'noopener,noreferrer');
-  });
-  $('import-file').addEventListener('change', (e) => {
-    if (e.target.files[0]) doImport(e.target.files[0]);
   });
 
   // Hash navigation: #edit=ITEM_ID ou #funnel=FUNNEL_ID

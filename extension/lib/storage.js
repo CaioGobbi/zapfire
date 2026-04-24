@@ -133,9 +133,56 @@ function now() {
 //   createdAt: number,
 //   updatedAt: number,
 //   uses: number,
+//
+//   // ----- Campos de envio (compatibilidade com formato ZapVoice) -----
+//   // Adicionados no Sprint de import/export. Itens antigos no banco
+//   // não têm esses campos e devem ser lidos com `?? default`.
+//   // O sender ainda não consome todos — fica pra iteração futura.
+//   isPtt?: boolean,        // só p/ audio. Default true (envia como mensagem de voz)
+//   isPtv?: boolean,        // só p/ video. Default false (envia como vídeo redondo / PTV)
+//   asViewOnce?: boolean,   // p/ áudio/imagem/vídeo. Default false
+//   mentionUsers?: string,  // default "none". Enum futuro
+//   isFavorite?: boolean,   // pinado na sidebar. Default false
+//   caption?: string,       // legenda p/ mídias. Default ""
+//   fileName?: string,      // só p/ type='file'. Preserva nome original
 // }
 
 const VALID_TYPES = new Set(['text', 'audio', 'image', 'video', 'file']);
+
+// Defaults dos campos novos por tipo de item. Usado tanto no add
+// quanto pra normalizar items legados na leitura (via withDefaults).
+function defaultsForType(type) {
+  const base = {
+    isFavorite: false,
+    mentionUsers: 'none',
+  };
+  switch (type) {
+    case 'audio':
+      return { ...base, isPtt: true, asViewOnce: false };
+    case 'video':
+      return { ...base, isPtv: false, asViewOnce: false, caption: '' };
+    case 'image':
+      return { ...base, asViewOnce: false, caption: '' };
+    case 'file':
+      return { ...base, caption: '', fileName: null };
+    case 'text':
+    default:
+      return base;
+  }
+}
+
+// Normaliza um item lido do banco aplicando defaults dos campos novos.
+// Não muda o que já existe — só preenche o que está undefined.
+// Exportado pra quem precisar uniformizar (ex: backup, sender).
+export function withItemDefaults(item) {
+  if (!item) return item;
+  const defs = defaultsForType(item.type);
+  const out = { ...item };
+  for (const k of Object.keys(defs)) {
+    if (out[k] === undefined) out[k] = defs[k];
+  }
+  return out;
+}
 
 function validateItemInput(item) {
   if (!item || typeof item !== 'object') {
@@ -150,6 +197,21 @@ function validateItemInput(item) {
   if (item.content == null) {
     throw new Error('Item precisa de conteúdo');
   }
+}
+
+// Pega só os campos novos de um input, aplicando defaults por tipo.
+// Mantém valores explícitos (incluindo `false`/`""`) — só substitui
+// undefined/null pelos defaults.
+function extractExtendedFields(input, type) {
+  const defs = defaultsForType(type);
+  const out = {};
+  for (const k of Object.keys(defs)) {
+    const v = input[k];
+    out[k] = v === undefined || v === null ? defs[k] : v;
+  }
+  // fileName só faz sentido pra 'file' — pra outros tipos, ignora
+  if (type !== 'file' && 'fileName' in out) delete out.fileName;
+  return out;
 }
 
 export async function addItem(input) {
@@ -169,6 +231,7 @@ export async function addItem(input) {
     createdAt: input.createdAt || now(),
     updatedAt: now(),
     uses: input.uses || 0,
+    ...extractExtendedFields(input, input.type),
   };
 
   await tx(STORE_ITEMS, 'readwrite', (store) => store.add(item));
@@ -177,7 +240,8 @@ export async function addItem(input) {
 
 export async function getItem(id) {
   if (!id) return null;
-  return tx(STORE_ITEMS, 'readonly', (store) => store.get(id));
+  const raw = await tx(STORE_ITEMS, 'readonly', (store) => store.get(id));
+  return raw ? withItemDefaults(raw) : raw;
 }
 
 // Filtros suportados:
@@ -186,7 +250,8 @@ export async function getItem(id) {
 //   tags:   string[] (item precisa ter TODAS as tags pedidas)
 // Resultado vem ordenado por createdAt DESC (mais novo primeiro).
 export async function listItems(filters = {}) {
-  const all = await tx(STORE_ITEMS, 'readonly', (store) => store.getAll());
+  const raw = await tx(STORE_ITEMS, 'readonly', (store) => store.getAll());
+  const all = raw.map(withItemDefaults);
 
   let results = all;
 
@@ -240,6 +305,32 @@ export async function updateItem(id, patch) {
 
   await tx(STORE_ITEMS, 'readwrite', (store) => store.put(updated));
   return updated;
+}
+
+// Sobrescreve um item por id (cria ou substitui). Diferente do
+// updateItem — aceita o objeto inteiro como veio (preserva createdAt
+// do input se vier, não força merge). Usado pelo import de backup
+// quando o modo é "overwrite".
+export async function putItem(item) {
+  validateItemInput(item);
+  const normalized = {
+    id: item.id || uuid(),
+    type: item.type,
+    title: item.title.trim(),
+    content: item.content,
+    mimeType: item.mimeType ?? null,
+    size: item.size ?? (item.content instanceof Blob ? item.content.size : null),
+    duration: item.duration ?? null,
+    thumbnail: item.thumbnail ?? null,
+    folder: item.folder ?? null,
+    tags: Array.isArray(item.tags) ? item.tags.filter(Boolean) : [],
+    createdAt: item.createdAt || now(),
+    updatedAt: now(),
+    uses: item.uses || 0,
+    ...extractExtendedFields(item, item.type),
+  };
+  await tx(STORE_ITEMS, 'readwrite', (store) => store.put(normalized));
+  return normalized;
 }
 
 // Helper específico — incrementa o contador de envios
@@ -345,10 +436,41 @@ export async function updateFunnel(id, patch) {
   return merged;
 }
 
+// Análogo a putItem — sobrescreve um funil por id (cria ou substitui).
+// Preserva createdAt do input se vier (importante pro import).
+export async function putFunnel(input) {
+  validateFunnelInput(input);
+  const funnel = {
+    id: input.id || uuid(),
+    name: input.name.trim(),
+    steps: input.steps.map((s) => ({
+      itemId: s.itemId,
+      delayMs: Math.max(0, Math.floor(s.delayMs)),
+    })),
+    createdAt: input.createdAt || now(),
+    updatedAt: now(),
+  };
+  await tx(STORE_FUNNELS, 'readwrite', (store) => store.put(funnel));
+  return funnel;
+}
+
 export async function deleteFunnel(id) {
   if (!id) return false;
   await tx(STORE_FUNNELS, 'readwrite', (store) => store.delete(id));
   return true;
+}
+
+// Apaga TUDO — items + funis. Meta preservado (preferências da UI).
+export async function clearAll() {
+  const [itemsCount, funnelsCount] = await Promise.all([
+    tx(STORE_ITEMS, 'readonly', (store) => store.count()),
+    tx(STORE_FUNNELS, 'readonly', (store) => store.count()),
+  ]);
+  await Promise.all([
+    tx(STORE_ITEMS, 'readwrite', (store) => store.clear()),
+    tx(STORE_FUNNELS, 'readwrite', (store) => store.clear()),
+  ]);
+  return { clearedItems: itemsCount, clearedFunnels: funnelsCount };
 }
 
 // ============================================================

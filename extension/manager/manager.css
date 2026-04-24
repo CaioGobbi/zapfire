@@ -915,3 +915,178 @@ dialog::backdrop {
   from { transform: translateY(8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* ====== Modal de backup ====== */
+.bk-section { padding: 4px 0 8px; }
+.bk-section + hr.bk-divider {
+  margin: 16px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.bk-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+.bk-section-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0 0 12px;
+}
+.bk-section-desc strong { color: var(--text); }
+.bk-section-desc em { color: var(--text); font-style: normal; background: var(--bg); padding: 1px 5px; border-radius: 3px; }
+
+.bk-h4 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 16px 0 8px;
+}
+
+.bk-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.bk-filename {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: 'SF Mono', Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.bk-warnings {
+  background: var(--warning-bg, rgba(255, 107, 0, 0.08));
+  border: 1px solid var(--warning, #ff6b00);
+  color: var(--warning, #ff6b00);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+
+.bk-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.bk-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bk-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.1;
+}
+.bk-stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bk-stat--funnel { border-left-color: var(--type-funnel); }
+.bk-stat--text   { border-left-color: var(--type-text); }
+.bk-stat--audio  { border-left-color: var(--type-audio); }
+.bk-stat--media  { border-left-color: var(--type-media); }
+.bk-stat--file   { border-left-color: var(--type-file); }
+
+.bk-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+.bk-fieldset legend {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 0 6px;
+}
+.bk-radio,
+.bk-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.bk-radio:hover,
+.bk-checkbox:hover { background: var(--bg-hover); }
+.bk-radio input,
+.bk-checkbox input { margin-top: 2px; flex-shrink: 0; cursor: pointer; }
+.bk-checkbox span { display: flex; flex-direction: column; gap: 2px; }
+.bk-checkbox small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.bk-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.bk-report-table th,
+.bk-report-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.bk-report-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.bk-report-table td.bk-num {
+  font-family: 'SF Mono', Menlo, monospace;
+  text-align: right;
+}
+.bk-report-table td.bk-num--ok { color: var(--success); }
+.bk-report-table td.bk-num--zero { color: var(--text-dim); }
+
+.bk-report-extras {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bk-report-pill {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.bk-report-pill--warning {
+  border-color: var(--warning, #ff6b00);
+  color: var(--warning, #ff6b00);
+}
+.bk-report-pill--error {
+  border-color: var(--accent);
+  color: var(--accent);
+}

@@ -16,8 +16,11 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <button class="btn-ghost" id="btn-import">Importar</button>
-      <button class="btn-ghost" id="btn-export">Exportar backup</button>
+      <button class="btn-ghost" id="btn-backup" title="Exportar / importar backup (compatível com ZapVoice 3.0.0)">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:middle;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+        Backup
+      </button>
+      <button class="btn-danger" id="btn-clear-all" title="Apagar todos os itens e funis">Apagar tudo</button>
       <button class="btn-ghost" id="btn-panel" title="Abrir painel do assinante">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:middle;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         Minha conta
@@ -221,10 +224,100 @@
     </form>
   </dialog>
 
+  <!-- ============== MODAL: BACKUP / RESTAURAÇÃO ============== -->
+  <dialog class="modal modal-large" id="modal-backup">
+    <header class="modal-header">
+      <h2>Backup / Restauração</h2>
+      <button type="button" class="modal-close" data-close="modal-backup">×</button>
+    </header>
+
+    <div class="modal-body">
+      <!-- Seção 1 — EXPORTAR -->
+      <section class="bk-section">
+        <h3 class="bk-section-title">Exportar backup</h3>
+        <p class="bk-section-desc">
+          Baixa todos os funis, mensagens, áudios, mídias e documentos num arquivo JSON único.
+          Formato compatível com o ZapVoice 3.0.0 — você pode usar esse mesmo arquivo
+          pra restaurar aqui ou levar pro ZapVoice.
+        </p>
+        <button type="button" class="btn-primary" id="btn-do-export">Baixar backup (.json)</button>
+      </section>
+
+      <hr class="bk-divider" />
+
+      <!-- Seção 2 — IMPORTAR -->
+      <section class="bk-section">
+        <h3 class="bk-section-title">Importar backup</h3>
+        <p class="bk-section-desc">
+          Compatível com backups do <strong>ZapVoice 3.0.0</strong> e do próprio Zapfire.
+          Vindo do ZapVoice? Faça <em>"Exportar backup"</em> lá e selecione o JSON aqui.
+        </p>
+
+        <div class="bk-file-row">
+          <button type="button" class="btn-ghost" id="btn-pick-backup">Selecionar arquivo .json</button>
+          <input type="file" id="backup-file" accept="application/json,.json" hidden />
+          <span class="bk-filename" id="backup-filename" hidden></span>
+        </div>
+
+        <!-- Preview (escondido até ler arquivo) -->
+        <div id="backup-preview" hidden>
+          <div class="bk-warnings" id="backup-warnings" hidden></div>
+
+          <h4 class="bk-h4">Conteúdo detectado</h4>
+          <div class="bk-stats" id="backup-stats">
+            <!-- preenchido via JS -->
+          </div>
+
+          <h4 class="bk-h4">Opções de importação</h4>
+
+          <fieldset class="bk-fieldset">
+            <legend>Se um item ou funil já existir com o mesmo ID:</legend>
+            <label class="bk-radio">
+              <input type="radio" name="bk-conflict" value="skip" checked />
+              <span><strong>Pular</strong> — mantém o que já tá aqui</span>
+            </label>
+            <label class="bk-radio">
+              <input type="radio" name="bk-conflict" value="overwrite" />
+              <span><strong>Sobrescrever</strong> — substitui pelo conteúdo do backup</span>
+            </label>
+            <label class="bk-radio">
+              <input type="radio" name="bk-conflict" value="rename" />
+              <span><strong>Importar como duplicata</strong> — adiciona "(importado)" no nome</span>
+            </label>
+          </fieldset>
+
+          <label class="bk-checkbox">
+            <input type="checkbox" id="bk-regenerate-ids" />
+            <span>
+              <strong>Gerar IDs novos pra tudo</strong>
+              <small>Útil pra duplicar todo o conteúdo dum backup numa conta já populada,
+              sem risco de colisão. Funis ajustam as referências automaticamente.</small>
+            </span>
+          </label>
+        </div>
+
+        <!-- Report final (escondido até importar) -->
+        <div id="backup-report" hidden>
+          <h4 class="bk-h4">Resultado</h4>
+          <table class="bk-report-table">
+            <thead>
+              <tr><th>Categoria</th><th>Importados</th><th>Pulados</th></tr>
+            </thead>
+            <tbody id="backup-report-body"></tbody>
+          </table>
+          <div class="bk-report-extras" id="backup-report-extras"></div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn-ghost" data-close="modal-backup">Fechar</button>
+      <button type="button" class="btn-primary" id="btn-do-import" disabled>Importar tudo</button>
+    </footer>
+  </dialog>
+
   <!-- Toast -->
   <div class="toast" id="toast" hidden></div>
-
-  <input type="file" id="import-file" accept="application/json" hidden />
 
   <!-- Polyfill MediaRecorder com suporte a OGG Opus real
        (Chrome nativo só exporta WebM, WA exige OGG pro waveform correto) -->
