@@ -10,6 +10,8 @@
 
 **Posicionamento:** o Zapfire **NÃO se conecta ao WhatsApp via API** (nem oficial, nem Baileys, nem whatsapp-web.js). Ele é uma **extensão Chrome** que injeta código no `web.whatsapp.com` do próprio usuário. A partir do Sprint 3.5 o envio usa diretamente a API interna do WA (Store hijacking via WA-JS + módulos nativos) — **invisível, sem abrir chats, funcional pra múltiplas conversas em paralelo**.
 
+**Repositório Git:** https://github.com/CaioGobbi/zapfire (privado). Branch principal: `main`.
+
 ## Stack
 
 ### Backend (`/backend`)
@@ -23,19 +25,20 @@
 
 ### Extensão (`/extension`)
 - **Manifesto:** V3, múltiplos content_scripts (ISOLATED + MAIN worlds)
-- **JS:** Vanilla (sem React no popup/sidebar/manager, decisão explícita pra facilitar ofuscação futura)
+- **JS:** Vanilla (sem React no popup/sidebar/quickbar/manager, decisão explícita pra facilitar ofuscação futura)
 - **Estilo:** Dark/cypherpunk (preto `#0a0a0a` + vermelho neon `#ff3b30` + branco) — identidade visual da IMP
 - **Componentes:**
   - `background/service-worker.js` — auth, deviceId persistente, heartbeat, rota `ZF_OPEN_MANAGER`
-  - `content/content.js` — ISOLATED world em `web.whatsapp.com`. Orquestra auth, monta sidebar iframe, faz bridge entre sidebar e injected
+  - `content/content.js` — ISOLATED world em `web.whatsapp.com`. Orquestra auth, monta sidebar iframe + quickbar iframe, faz bridge entre iframes e injected, mostra toast/confirm global, renderiza indicador piscante
   - `main-world/injected.js` — **MAIN world** em `web.whatsapp.com`. Acessa `window.require` do WA (Metro bundler) pra chamar módulos nativos. Carrega junto com o WA-JS
   - `vendor/wppconnect-wa.js` — WA-JS bundle (~500KB), expõe `window.WPP` com API de envio invisível
   - `vendor/opus/` — opus-media-recorder (polyfill de MediaRecorder com saída OGG Opus real, pro PTT ter waveform correto)
   - `lib/storage.js` — wrapper IndexedDB (items + funnels + meta)
   - `lib/sender.js` — envio via DOM (fallback pra quando não tem JID; usado pra envios avulsos)
   - `lib/funnel-engine.js` — executor de funis com delays, cancelamento, lock de envio serializado entre runs paralelos
-  - `sidebar/` — iframe chrome-extension, 5 tabs (Scripts, Áudios, Mídias, Funis, Ativos), cards + runner de funil
-  - `manager/` — aba dedicada pra CRUD de items+funis, conversão OGG de áudio no upload, export/import JSON
+  - `sidebar/` — iframe chrome-extension, **5 tabs** (Funis, Mensagens, Áudios, Mídias, Ativos) com ícones SVG, cards colapsados (click pra expandir), runner de funil
+  - `quickbar/` — **iframe horizontal injetado dentro do `<footer>` do WA Web**. Lista flat de chips clicáveis em ordem funil → mensagens → áudios → mídias. Click envia pro chat aberto
+  - `manager/` — aba dedicada com **dashboard "Tudo"** (welcome + stats), **list view compacta** por tipo, editor de funil com **sub-modal tabbed** pra adicionar steps (custom select com busca), conversão OGG de áudio no upload, export/import JSON
   - `popup/` — login/logout + botão "Abrir gerenciador"
 
 ## Arquitetura de Autenticação (O CORAÇÃO DO SISTEMA)
@@ -76,34 +79,36 @@ Valores monetários SEMPRE em centavos (`Int`), mesmo padrão do PayT usado no M
 
 ## Arquitetura de Envio (Sprint 3.5) — LEIA ANTES DE MEXER
 
-Sistema roda em **3 mundos JS distintos** comunicando via `postMessage`:
+Sistema roda em **4 contextos JS distintos** comunicando via `postMessage`:
 
 ```
-┌─────────────────────────────────────────┐
-│  sidebar.js                             │
-│  (iframe, chrome-extension:// origin)   │
-│  IndexedDB compartilhado com manager    │
-└─────────────────────────────────────────┘
-            ↕ window.parent.postMessage
-┌─────────────────────────────────────────┐
-│  content.js                             │
-│  (ISOLATED world, web.whatsapp.com)     │
-│  Acesso a chrome.* APIs                 │
-│  Bridge: sidebar ↔ injected             │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐   ┌─────────────────────────────────────────┐
+│  sidebar.js                             │   │  quickbar.js                            │
+│  (iframe, chrome-extension:// origin)   │   │  (iframe DENTRO do <footer> do WA,      │
+│  IndexedDB compartilhado com manager    │   │   chrome-extension:// origin)           │
+│  Dona dos activeRuns Map (funis ativos) │   │  Chips clicáveis pra envio rápido       │
+└─────────────────────────────────────────┘   └─────────────────────────────────────────┘
+            ↕ window.parent.postMessage                       ↕ window.parent.postMessage
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│  content.js                                                                          │
+│  (ISOLATED world, web.whatsapp.com)                                                  │
+│  Acesso a chrome.* APIs                                                              │
+│  Bridge entre iframes e injected                                                     │
+│  Renderiza toast global, confirm modal, indicador piscante                           │
+└──────────────────────────────────────────────────────────────────────────────────────┘
             ↕ window.postMessage
             ↕ (filtrado por __zf_source)
-┌─────────────────────────────────────────┐
-│  injected.js                            │
-│  (MAIN world, web.whatsapp.com)         │
-│  Acesso a window.require, window.WPP    │
-│  SEM chrome.* APIs                      │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│  injected.js                                                                         │
+│  (MAIN world, web.whatsapp.com)                                                      │
+│  Acesso a window.require, window.WPP                                                 │
+│  SEM chrome.* APIs                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────┘
             ↕ direct call
-┌─────────────────────────────────────────┐
-│  WA-JS (WPP) + módulos nativos do WA    │
-│  Envia msgs diretamente pelo protocolo  │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│  WA-JS (WPP) + módulos nativos do WA                                                 │
+│  Envia msgs diretamente pelo protocolo                                               │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Roteamento atual de envios:**
@@ -119,7 +124,9 @@ Sistema roda em **3 mundos JS distintos** comunicando via `postMessage`:
 
 **Captura de JID**: primeiro tenta `WPP.chat.getActiveChat()._serialized` (via injected), fallback pro DOM scraping do `[aria-selected="true"]` em `#pane-side`.
 
-**Protocolo content ↔ injected**:
+### Protocolos de mensagens
+
+**content ↔ injected** (window.postMessage, mesmo window, worlds diferentes):
 ```js
 // content → injected
 window.postMessage({
@@ -138,13 +145,36 @@ window.postMessage({
 }, '*');
 ```
 
-**Protocolo sidebar ↔ content**:
+**sidebar ↔ content** (via window.parent.postMessage):
 ```js
-// sidebar → content (via window.parent.postMessage)
-{ type: 'ZF_SEND_TEXT' | 'ZF_SEND_MEDIA' | 'ZF_SEND_AUDIO' | 'ZF_GET_CHAT_ID' | 'ZF_OPEN_MANAGER', requestId, jid?, ...payload }
+// sidebar → content
+{
+  type: 'ZF_SEND_TEXT' | 'ZF_SEND_MEDIA' | 'ZF_SEND_AUDIO'
+      | 'ZF_GET_CHAT_ID' | 'ZF_OPEN_MANAGER' | 'ZF_CLOSE_SIDEBAR'
+      | 'ZF_QUERY_CHAT_STATE' | 'ZF_SWITCH_CHAT'
+      | 'ZF_TOAST' | 'ZF_CONFIRM' | 'ZF_ACTIVE_RUNS_CHANGED',
+  requestId,
+  jid?, ...payload
+}
 
-// content → sidebar (via iframe.contentWindow.postMessage)
-{ type: 'ZF_RESPONSE', requestId, result } | { type: 'ZF_CHAT_STATE', isOpen, chatName }
+// content → sidebar
+{ type: 'ZF_RESPONSE', requestId, result }
+{ type: 'ZF_CHAT_STATE', isOpen, chatName }
+{ type: 'ZF_RUN_FUNNEL_FROM_QB', funnelId }    // forwarded from quickbar
+{ type: 'ZF_FOCUS_ACTIVITY' }                   // indicador clicado
+```
+
+**quickbar ↔ content**: mesmo protocolo que sidebar (content.js aceita mensagens dos 2 iframes). Quickbar adiciona:
+```js
+// quickbar → content
+{ type: 'ZF_QB_RUN_FUNNEL', funnelId }          // delega run pro sidebar (dono dos activeRuns)
+{ type: 'ZF_TOAST', message, toastType }
+```
+
+**sidebar broadcast de runs ativos** (pra content mostrar indicador na conversa):
+```js
+// sidebar → content (sempre que state.activeRuns muda)
+{ type: 'ZF_ACTIVE_RUNS_CHANGED', jids: ['5511...@c.us', '...'] }
 ```
 
 ## O Que Já Está Funcional
@@ -158,16 +188,27 @@ window.postMessage({
 
 ### Sprint 3 (UI + envios)
 - **Storage IndexedDB** (`lib/storage.js`): items + funnels + meta, export/import JSON
-- **Sidebar iframe** em chrome-extension://: 5 tabs (Scripts, Áudios, Mídias, Funis, Ativos)
+- **Sidebar iframe** em chrome-extension:// com 5 tabs (ordem: Funis, Mensagens, Áudios, Mídias, Ativos), ícones SVG stacked, cards colapsados com click-pra-expandir
 - **Layout responsivo**: sidebar empurra o conteúdo do WA ao abrir (não cobre)
-- **Envio avulso** (botão "Enviar" em cards): funciona pra texto, imagem, vídeo, arquivo, áudio
-- **Manager em aba dedicada**: CRUD completo de items e funis, drag-and-drop pra steps, waveform preview, export/import backup JSON
-- **Funnel engine**: delays cancelláveis, progresso ao vivo, múltiplos funis paralelos, lock de envio serializado
+- **Quickbar iframe** injetada dentro do `<footer>` do WA Web — chips horizontais flat (funis/mensagens/áudios/mídias) com ícones coloridos por tipo
+- **Envio avulso** (botão "Enviar" em cards ou chip da quickbar): funciona pra texto, imagem, vídeo, arquivo, áudio
+- **Manager em aba dedicada**:
+  - Dashboard na tab "Tudo": welcome com nome do usuário + 5 stat cards coloridos (Funis/Mensagens/Áudios/Mídias/Documentos), cada um clicável pra navegar
+  - List view compacta nas outras tabs (só badge colorido + nome, click abre edição)
+  - Botão `+ Novo` contextual (muda label conforme a aba: "+ Nova mensagem", "+ Novo áudio", etc)
+  - Editor de funil com lista de steps + botão `+ Adicionar item` que abre sub-modal
+  - Sub-modal "Adicionar item" com tabs (Mensagem/Áudio/Mídia/Documento), custom select com barra de busca, delay em min+seg
+  - Modal de edição com fields contextuais por tipo (mensagem: só texto; áudio: só arquivo; mídia: arquivo+legenda)
+  - Export/import backup JSON
+- **Funnel engine**: delays cancelláveis com live countdown, progresso ao vivo, múltiplos funis paralelos, lock de envio serializado
+- **Confirm dialog** ao cancelar funil (modal centralizado no viewport, não nativo)
+- **Toast global** no content script (top-center) — usado por sidebar e quickbar
+- **Indicador piscante** na conversa do WA quando tem funil ativo pra ela (círculo vermelho com "Z", pulsa via CSS keyframes). Click abre sidebar na tab Ativos
 
 ### Sprint 3.5 (Store hijacking / envio invisível)
 - **WA-JS (WPP) integrado** no MAIN world — fornece `WPP.chat.sendFileMessage`, `WPP.chat.sendVoiceMessage`, `WPP.chat.getActiveChat`
 - **Módulos nativos do WA capturados via `require()`**: `WAWebSendTextMsgChatAction`, `WAWebChatCollection`, `WAWebWidFactory`
-- **Bridge 3 mundos** via postMessage com marcadores `__zf_source`
+- **Bridge 4 mundos** via postMessage com marcadores `__zf_source`
 - **Texto invisível**: `sendTextMsgToChat(chat, text)` direto, sem abrir conversa
 - **Mídia invisível**: `WPP.chat.sendFileMessage` pra imagem/vídeo/arquivo
 - **Áudio invisível como PTT**: conversão MP3/WAV → OGG Opus real (via opus-media-recorder) no upload no manager, salva como OGG no IndexedDB; envio usa `isPtt: true` → WA renderiza com waveform detalhado no remetente E destinatário
@@ -180,18 +221,21 @@ window.postMessage({
 - **Extração de número:** `localStorage['last-wid-md']` é o método principal. `IndexedDB wawc/user` NÃO contém o JID do usuário logado (são dados genéricos key-value)
 - **Chave no formato UUID v4 sem hífens** (`^[a-f0-9]{32}$`) — compatibilidade visual com ZapVoice
 - **Manifest V3 com `chrome.alarms`** (NÃO esquecer `"alarms"` em `permissions` — bug já resolvido no passado)
-- **Sem React no popup/sidebar/manager** — vanilla JS facilita ofuscação futura
+- **Sem React no popup/sidebar/quickbar/manager** — vanilla JS facilita ofuscação futura
 - **IDs de chave geradas com `crypto.randomUUID().replace(/-/g, '')`**
 - **`host_permissions` inclui `http://localhost:3000/*`** em dev
 
 ### Sprint 3
 - **Sidebar como iframe** na origem `chrome-extension://`, não injeção direta no DOM do WA — isso permite compartilhar IndexedDB com o manager (mesma origin)
+- **Quickbar também como iframe** (mesma origem) injetada dentro do `<footer>` do #main do WA — footer cresce pra comportar input + quickbar, flui com o layout nativo do WA sem overflow
 - **Armazenamento tudo local no IndexedDB do lado chrome-extension** (DB name `zapfire_db`). Zero backend storage. Privacidade máxima
-- **Funnel engine no contexto da sidebar** (iframe) — fechar sidebar NÃO para funis (iframe persiste no DOM)
+- **Funnel engine no contexto da sidebar** (iframe) — fechar sidebar NÃO para funis (iframe persiste no DOM). Quickbar delega runs pra sidebar via `ZF_QB_RUN_FUNNEL` pra centralizar o `activeRuns` Map
 - **Sends serializados globalmente via Promise chain** (`sendChain` no funnel-engine). Delays rodam em paralelo, ato físico de envio é sequencial
+- **Campos `tags` e `folder` removidos da UI do manager** — storage.js ainda suporta pra retrocompat, mas UI simplificou. Cada tipo tem seus próprios fields (mensagem: texto; áudio: arquivo; mídia: arquivo+legenda)
+- **Fix conhecido do `[hidden]`**: `.field[hidden] { display: none !important }` e `.tab-badge[hidden] { display: none !important }` — `* { margin: 0 }` e `display: flex/inline-block` sobrescrevem o comportamento padrão do atributo `hidden`
 
 ### Sprint 3.5
-- **Dois content_scripts**: ISOLATED (content.js) e MAIN (injected.js). ISOLATED tem `chrome.*`, MAIN tem `window.require`/`window.WPP`
+- **Dois content_scripts em ISOLATED + MAIN**: ISOLATED (content.js) tem `chrome.*`, MAIN (injected.js) tem `window.require`/`window.WPP`
 - **WA-JS (wppconnect-wa.js) carregado ANTES do injected.js** via `content_scripts` com `world: "MAIN"`. Lista de JS é executada em ordem
 - **Texto via módulos nativos** (não WA-JS), mídia/áudio via WA-JS — texto é simples, vale evitar overhead
 - **Áudio sempre convertido pra OGG Opus no upload** (não no envio) — user espera 1x por arquivo, depois envios são instantâneos
@@ -212,6 +256,7 @@ window.postMessage({
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
 - Fallback DOM em `lib/sender.js` ainda existe — pode ser removido quando envio via API for 100% estável
 - Conversão OGG bloqueia UI do manager durante o upload — poderia ser async/progress
+- `tags` e `folder` ainda no schema do IndexedDB mas sem UI — decidir entre remover do storage ou reintroduzir UI
 
 ## Estrutura Atual do Projeto
 
@@ -221,6 +266,7 @@ zapfire/
 ├── README.md
 ├── .gitignore
 ├── backend/
+│   ├── .env                              ← gitignored (secrets)
 │   ├── .env.example
 │   ├── package.json
 │   ├── prisma/
@@ -248,13 +294,17 @@ zapfire/
     │   ├── sender.js                     ← envio via DOM (fallback)
     │   └── funnel-engine.js              ← executor de funis paralelos
     ├── sidebar/
-    │   ├── sidebar.html
-    │   ├── sidebar.css                   ← dark cypherpunk
-    │   └── sidebar.js                    ← 5 tabs, cards, runner ativo
+    │   ├── sidebar.html                  ← 5 tabs com ícones SVG
+    │   ├── sidebar.css                   ← dark cypherpunk + cores por tipo
+    │   └── sidebar.js                    ← cards colapsados, activity Map
+    ├── quickbar/
+    │   ├── quickbar.html                 ← barra horizontal com chips
+    │   ├── quickbar.css
+    │   └── quickbar.js                   ← injetada dentro do footer do WA
     ├── manager/
-    │   ├── manager.html                  ← carrega opus-media-recorder + manager.js
+    │   ├── manager.html                  ← dashboard + list view + modais
     │   ├── manager.css
-    │   └── manager.js                    ← CRUD items+funis + conversão OGG no upload
+    │   └── manager.js                    ← CRUD, conversão OGG, editor de funil tabbed
     ├── popup/
     │   ├── popup.html
     │   └── popup.js                      ← login + botão Abrir gerenciador
@@ -277,14 +327,36 @@ zapfire/
 - **Nenhum segredo hardcoded** — tudo via `.env`
 - **Status HTTP coerentes:** 401 (chave inválida), 402 (assinatura expirada), 403 (chave bloqueada/número errado), 429 (limite de devices)
 - **Marcadores `__zf_source`** em toda postMessage entre content ↔ injected pra filtrar ruído de outros scripts
+- **Concordância de gênero nos títulos** (Nova mensagem vs Novo áudio) — usar `TYPE_GENDER` map no manager.js
 
 ## Estética/UI
 
-- **Palette:** `--bg: #0a0a0a`, `--bg-elevated: #141414`, `--border: #262626`, `--text: #f5f5f5`, `--text-dim: #a3a3a3`, `--accent: #ff3b30`, `--accent-glow: rgba(255, 59, 48, 0.15)`, `--success: #10b981`
+### Paleta base
+- `--bg: #0a0a0a` / `--bg-elevated: #141414` / `--bg-hover: #1c1c1c`
+- `--border: #262626` / `--border-hover: #383838`
+- `--text: #f5f5f5` / `--text-dim: #a3a3a3`
+- `--accent: #ff3b30` / `--accent-glow: rgba(255, 59, 48, 0.15)`
+- `--success: #10b981` / `--warning: #ff6b00` / `--danger: #dc2626`
+
+### Cores por tipo (aplicadas consistentemente em badges, bordas esquerdas de cards, ícones, stat cards)
+- **Funil**: `#ff3b30` (vermelho accent) — var `--type-funnel`
+- **Mensagem (text)**: `#38bdf8` (azul ciano) — var `--type-text`
+- **Áudio**: `#a855f7` (roxo) — var `--type-audio`
+- **Mídia (image+video)**: `#f59e0b` (amber) — var `--type-media`
+- **Arquivo (file)**: `#ec4899` (rosa magenta) — var `--type-file`
+
+### Outros padrões
 - **Tipografia:** `-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`; monospace `'SF Mono', Menlo, monospace`
 - **Raio de borda:** 6px (inputs/botões), 8px (cards)
-- **Ícones:** usar Lucide (via `lucide-react` ou SVG inline)
+- **Ícones:** SVG inline estilo Lucide (stroke outline, 14-22px). Cores por tipo quando relevante
 - **Tom industrial/cypherpunk:** dark backgrounds, acentos vermelhos neon, zero gradientes pastel
+- **Animações:** pulse (indicador de funil ativo), transform 0.15s ease-out (layouts shift)
+
+### Layouts principais
+- **Sidebar** (320px fixed à direita): 5 tabs compactas com ícone+texto empilhados, cards colapsados clique-pra-expandir, borda esquerda colorida pelo tipo
+- **Quickbar** (44px, dentro do `<footer>` do WA): chips horizontais com scroll lateral, icon-only (sem texto de categoria), separadores entre grupos
+- **Manager** (aba dedicada full-screen): sidebar esquerda 220px com filter items + ícones, main com dashboard OU list view
+- **Modais** (`<dialog>` nativo centralizado via `margin: auto`): header + body + footer, backdrop com blur
 
 ## Integrações Existentes no Ecossistema
 
