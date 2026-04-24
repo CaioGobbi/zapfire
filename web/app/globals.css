@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   ZAPFIRE — painel web
+   Paleta cypherpunk mapeada pros tokens shadcn (HSL).
+   ============================================================ */
+
+@layer base {
+  :root {
+    /* shadcn tokens (HSL sem o hsl()) — mapeados pra Zapfire dark */
+    --background: 0 0% 4%;             /* #0a0a0a */
+    --foreground: 0 0% 96%;            /* #f5f5f5 */
+
+    --card: 0 0% 8%;                   /* #141414 */
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 4 100% 59%;             /* #ff3b30 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 11%;             /* #1c1c1c */
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 0 0% 11%;
+    --muted-foreground: 0 0% 64%;      /* #a3a3a3 */
+
+    --accent: 0 0% 15%;                /* #262626 — hover sutil */
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 0 62% 45%;          /* #b51b1b approx */
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 15%;                /* #262626 */
+    --input: 0 0% 15%;
+    --ring: 4 100% 59%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+/* Scrollbar minimalista */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(0 0% 22%); }
