@@ -103,7 +103,18 @@ async function init() {
       payload: { keyValue: stored.zf_key, phone },
     });
 
+    // Sprint 4 ETAPA 7 — estados recuperáveis pelo painel (grace/blocked
+    // pós-grace, número errado, chave bloqueada) montam a sidebar assim
+    // mesmo: o banner vermelho dentro dela já orienta o user pro painel
+    // com botão "Renovar". Só erros destrutivos (chave deletada no
+    // backend, rede caiu) caem no banner fixo de topo sem UI.
+    const RECOVERABLE_BLOCK_CODES = new Set(['EXPIRED', 'WRONG_PHONE', 'BLOCKED']);
     if (!result.ok) {
+      if (RECOVERABLE_BLOCK_CODES.has(result.code)) {
+        console.log('[Zapfire] Subscrição bloqueada (' + result.code + ') — montando sidebar pro banner de renovação');
+        mountSidebar();
+        return;
+      }
       showBanner({
         title: 'Zapfire bloqueado',
         message: result.message,
