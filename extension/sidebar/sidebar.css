@@ -42,7 +42,8 @@ button { font-family: inherit; }
 /* ====== Layout principal ====== */
 .sb {
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  /* rows: header · license-banner · tabs · search · list (1fr) · footer */
+  grid-template-rows: auto auto auto auto 1fr auto;
   height: 100vh;
 }
 
