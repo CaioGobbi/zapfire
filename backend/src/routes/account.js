@@ -155,7 +155,7 @@ export default async function accountRoutes(fastify) {
       const user = await prisma.user.findUnique({ where: { email } });
       if (user) {
         const { plaintext, hash } = generateSecureToken();
-        await prisma.emailToken.create({
+        const token = await prisma.emailToken.create({
           data: {
             userId: user.id,
             type: 'MAGIC_LINK',
@@ -172,12 +172,23 @@ export default async function accountRoutes(fastify) {
             <p style="color:#a3a3a3;font-size:12px;word-break:break-all;">Ou copie: ${url}</p>
           </div>
         </body></html>`;
-        await sendEmail({
+        const emailResult = await sendEmail({
           to: email,
           subject: 'Zapfire — seu link de acesso',
           html,
           text: `Acesse sua conta Zapfire: ${url}\n(link expira em 7 dias)`,
         });
+        // Sprint 6 — salva resendEmailId pra tracking de bounce
+        if (emailResult?.id) {
+          await prisma.emailToken.update({
+            where: { id: token.id },
+            data: {
+              resendEmailId: emailResult.id,
+              deliveryStatus: 'sent',
+              deliveryUpdatedAt: new Date(),
+            },
+          }).catch(() => {});
+        }
       }
       return reply.code(200).send({ ok: true, message: publicMsg });
     }

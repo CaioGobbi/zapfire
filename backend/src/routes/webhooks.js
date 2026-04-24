@@ -90,6 +90,36 @@ const kirvanoWebhookSchema = z
   .passthrough();
 
 // ------------------------------------------------------------
+// Schema Resend webhook (Sprint 6)
+// ------------------------------------------------------------
+const resendWebhookSchema = z
+  .object({
+    type: z.string().min(1), // email.sent, email.delivered, email.bounced, email.complained, etc
+    created_at: z.string().optional(),
+    data: z
+      .object({
+        email_id: z.string().optional(),
+        to: z.array(z.string()).optional(),
+        subject: z.string().optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+// Extrai o status canônico a partir do evento.
+// Referência: https://resend.com/docs/dashboard/webhooks/event-types
+const RESEND_EVENT_STATUS = {
+  'email.sent':      'sent',
+  'email.delivered': 'delivered',
+  'email.bounced':   'bounced',
+  'email.complained':'complained',
+  'email.delivery_delayed': 'delayed',
+  'email.failed':    'failed',
+  'email.opened':    null,   // ignora
+  'email.clicked':   null,   // ignora
+};
+
+// ------------------------------------------------------------
 // Registra as rotas
 // ------------------------------------------------------------
 export default async function webhookRoutes(fastify) {
@@ -183,6 +213,106 @@ export default async function webhookRoutes(fastify) {
 
       fastify.log.info({ msg: 'webhook kirvano: ok', event, saleId: payload.sale_id, result });
       return reply.code(200).send({ ok: true, ...result });
+    }
+  );
+
+  // ==========================================================
+  // POST /webhooks/resend — eventos de entrega de email
+  // ==========================================================
+  // Auth: header X-Zapfire-Resend-Token deve bater com RESEND_WEBHOOK_TOKEN.
+  // Se a env não tá configurada, rejeita tudo (fail-secure).
+  //
+  // Sempre retorna 200 após validar token (evita retry loop do Resend).
+  // Erros de processamento vão pra audit_logs.
+  //
+  // TODO Sprint 7: migrar pra assinatura svix (padrão do Resend) em vez
+  // de token simples no header. Pra MVP, token compartilhado é suficiente.
+  // ==========================================================
+  fastify.post(
+    '/webhooks/resend',
+    { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const expected = process.env.RESEND_WEBHOOK_TOKEN;
+      const received = request.headers['x-zapfire-resend-token'];
+      if (!expected) {
+        fastify.log.error({ msg: 'RESEND_WEBHOOK_TOKEN não configurado' });
+        return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+      }
+      if (!received || received !== expected) {
+        fastify.log.warn({ msg: 'webhook resend: token inválido' });
+        return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+      }
+
+      const parsed = resendWebhookSchema.safeParse(request.body);
+      if (!parsed.success) {
+        fastify.log.warn({ msg: 'webhook resend: payload inválido', errors: parsed.error.flatten() });
+        return reply.code(200).send({ ok: false, code: 'BAD_PAYLOAD' });
+      }
+
+      const { type, data } = parsed.data;
+      const emailId = data?.email_id;
+      const status = RESEND_EVENT_STATUS[type];
+
+      // Evento que não nos interessa (opened/clicked) — só loga, 200 OK
+      if (status === null) {
+        fastify.log.info({ msg: 'webhook resend: evento ignorado', type, emailId });
+        return reply.code(200).send({ ok: true, ignored: type });
+      }
+      if (status === undefined) {
+        fastify.log.info({ msg: 'webhook resend: tipo desconhecido', type });
+        return reply.code(200).send({ ok: true, ignored: type });
+      }
+      if (!emailId) {
+        fastify.log.warn({ msg: 'webhook resend: sem email_id', type });
+        return reply.code(200).send({ ok: true, warning: 'no_email_id' });
+      }
+
+      // Localiza EmailToken por resendEmailId e atualiza status
+      try {
+        const updated = await prisma.emailToken.updateMany({
+          where: { resendEmailId: emailId },
+          data: { deliveryStatus: status, deliveryUpdatedAt: new Date() },
+        });
+
+        // Se foi bounce/complained, registra em audit_logs pra o admin
+        // conseguir investigar via UI
+        if (status === 'bounced' || status === 'complained' || status === 'failed') {
+          const token = await prisma.emailToken.findFirst({
+            where: { resendEmailId: emailId },
+            include: { user: { select: { id: true, email: true } } },
+          });
+          if (token) {
+            await prisma.auditLog.create({
+              data: {
+                userId: token.userId,
+                action: `email.${status}`,
+                entityType: 'EmailToken',
+                entityId: token.id,
+                metadata: {
+                  resendEventType: type,
+                  resendEmailId: emailId,
+                  userEmail: token.user?.email,
+                  subject: data?.subject,
+                  to: data?.to,
+                },
+              },
+            });
+          }
+        }
+
+        fastify.log.info({
+          msg: 'webhook resend: status atualizado',
+          type,
+          status,
+          emailId,
+          matched: updated.count,
+        });
+        return reply.code(200).send({ ok: true, status, matched: updated.count });
+      } catch (err) {
+        fastify.log.error({ msg: 'webhook resend: exception', err: err?.message });
+        await safeAuditError(type, emailId, err?.message || String(err));
+        return reply.code(200).send({ ok: false, code: 'INTERNAL_ERROR' });
+      }
     }
   );
 }

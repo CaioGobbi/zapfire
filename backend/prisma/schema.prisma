@@ -335,10 +335,16 @@ model EmailToken {
   usedAt    DateTime?
   createdAt DateTime       @default(now())
 
+  // Sprint 6 — tracking de entrega via webhook do Resend
+  resendEmailId     String?
+  deliveryStatus    String? // sent | delivered | bounced | complained | failed
+  deliveryUpdatedAt DateTime?
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tokenHash])
   @@index([userId])
+  @@index([resendEmailId])
   @@map("email_tokens")
 }
 

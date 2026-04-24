@@ -79,14 +79,26 @@ export function mapKirvanoEvent(event) {
 }
 
 // ------------------------------------------------------------
-// Helper pra decidir qual plano aplicar quando o webhook chega.
-// Usa offer_id se estiver no map ANNUAL_OFFER_IDS / MONTHLY_OFFER_IDS,
-// senão cai no fallback por charge_frequency.
+// Resolve o plan code canonical a partir do payload da Kirvano.
+// Ordem de prioridade:
+//   1. offerId bate em ANNUAL_OFFER_IDS → annual_v1
+//   2. offerId bate em MONTHLY_OFFER_IDS → monthly_v1
+//   3. Fallback por charge_frequency ("ANNUALLY" → annual_v1; resto → monthly_v1)
 //
-// Quando você souber os offer_ids reais da Kirvano, adicione aqui.
+// IMPORTANTE: o fallback é confiável pro recorrente porque a Kirvano
+// sempre manda charge_frequency. Mas se você tiver MÚLTIPLOS planos
+// anuais (ex: anual básico + anual pro), o fallback não distingue — aí
+// o offer_id vira obrigatório.
+//
+// COMO POPULAR os sets:
+//   1. Kirvano → painel → suas ofertas → pega o ID da URL (UUID)
+//   2. Adiciona nos Sets abaixo
+//   3. Redeploy do backend
+//   (Sprint 6 débito: fazer isso via config/env pra evitar redeploy)
 // ------------------------------------------------------------
 const ANNUAL_OFFER_IDS = new Set([
   // TODO: preencher com offer_id real da Kirvano pro plano anual
+  // Ex: 'abc12345-6789-...'
 ]);
 const MONTHLY_OFFER_IDS = new Set([
   // TODO: preencher com offer_id real da Kirvano pro plano mensal
@@ -95,7 +107,14 @@ const MONTHLY_OFFER_IDS = new Set([
 export function resolvePlanCode({ offerId, chargeFrequency }) {
   if (offerId && ANNUAL_OFFER_IDS.has(offerId)) return 'annual_v1';
   if (offerId && MONTHLY_OFFER_IDS.has(offerId)) return 'monthly_v1';
-  // Fallback: charge_frequency em "ANNUALLY" | "MONTHLY" | "ONE_TIME"
   if (chargeFrequency === 'ANNUALLY') return 'annual_v1';
   return 'monthly_v1';
+}
+
+// Expõe os mappings pra visibilidade admin (GET /api/v1/admin/kirvano-mapping)
+export function getOfferMappings() {
+  return {
+    annual_v1: Array.from(ANNUAL_OFFER_IDS),
+    monthly_v1: Array.from(MONTHLY_OFFER_IDS),
+  };
 }

@@ -501,6 +501,62 @@ export default async function adminRoutes(fastify) {
   });
 
   // ====================================================
+  // GET /emails — lista email tokens com status de entrega (Sprint 6)
+  // ====================================================
+  fastify.get('/emails', ADMIN_GUARDS, async (request, reply) => {
+    const q = z
+      .object({
+        status: z.enum(['sent', 'delivered', 'bounced', 'complained', 'failed', 'pending']).optional(),
+        limit: z.coerce.number().min(1).max(100).default(50),
+      })
+      .safeParse(request.query);
+    if (!q.success) return reply.code(400).send({ ok: false, code: 'BAD_QUERY' });
+
+    const where = {};
+    if (q.data.status === 'pending') {
+      where.deliveryStatus = null;
+    } else if (q.data.status) {
+      where.deliveryStatus = q.data.status;
+    }
+
+    const tokens = await prisma.emailToken.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: q.data.limit,
+      select: {
+        id: true,
+        type: true,
+        deliveryStatus: true,
+        deliveryUpdatedAt: true,
+        resendEmailId: true,
+        usedAt: true,
+        expiresAt: true,
+        createdAt: true,
+        user: { select: { id: true, email: true, fullName: true } },
+      },
+    });
+    return reply.code(200).send({ ok: true, emails: tokens });
+  });
+
+  // ====================================================
+  // GET /kirvano-mapping — visibilidade do offer_id → plano (read-only)
+  // ====================================================
+  fastify.get('/kirvano-mapping', ADMIN_GUARDS, async (request, reply) => {
+    const { getOfferMappings } = await import('../lib/kirvanoParser.js');
+    const mapping = getOfferMappings();
+    const plans = await prisma.plan.findMany({
+      where: { code: { in: ['monthly_v1', 'annual_v1'] } },
+      select: { code: true, name: true, priceCents: true, billingCycle: true },
+    });
+    return reply.code(200).send({
+      ok: true,
+      mapping,
+      plans,
+      note: 'Offer IDs são hardcoded em backend/src/lib/kirvanoParser.js. Pra adicionar, edite o arquivo e faça redeploy.',
+    });
+  });
+
+  // ====================================================
   // POST /users/:id/promote — muda role do user
   // ====================================================
   fastify.post('/users/:id/promote', ADMIN_GUARDS, async (request, reply) => {

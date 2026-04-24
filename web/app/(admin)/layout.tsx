@@ -3,7 +3,7 @@
 import { ReactNode, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { ShieldAlert, LayoutDashboard, Users, Key, LogOut, ArrowLeft } from 'lucide-react';
+import { ShieldAlert, LayoutDashboard, Users, Key, Mail, LogOut, ArrowLeft } from 'lucide-react';
 
 import { useAuthStore } from '@/lib/authStore';
 import { logout } from '@/lib/auth';
@@ -21,6 +21,7 @@ const NAV = [
   { href: '/admin',          label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/usuarios', label: 'Usuários',  icon: Users },
   { href: '/admin/chaves',   label: 'Chaves',    icon: Key },
+  { href: '/admin/emails',   label: 'Emails',    icon: Mail },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {

@@ -182,7 +182,7 @@ export async function processSaleApproved(payload) {
 
   // 7. Gera EmailToken MAGIC_LINK (7 dias)
   const { plaintext: magicPlain, hash: magicHash } = generateSecureToken();
-  await prisma.emailToken.create({
+  const magicToken = await prisma.emailToken.create({
     data: {
       userId: user.id,
       type: 'MAGIC_LINK',
@@ -191,15 +191,25 @@ export async function processSaleApproved(payload) {
     },
   });
 
-  // 8. Envia email de boas-vindas
+  // 8. Envia email de boas-vindas e salva resendEmailId (Sprint 6 — pra tracking de bounce)
   const magicLinkUrl = `${panelBaseUrl()}/primeiro-acesso?token=${magicPlain}`;
-  await sendWelcomeEmail({
+  const emailResult = await sendWelcomeEmail({
     to: email,
     name,
     planName: plan.name,
     keyValue,
     magicLinkUrl,
   });
+  if (emailResult?.id) {
+    await prisma.emailToken.update({
+      where: { id: magicToken.id },
+      data: {
+        resendEmailId: emailResult.id,
+        deliveryStatus: 'sent',
+        deliveryUpdatedAt: new Date(),
+      },
+    });
+  }
 
   // 9. Audit log
   await logAudit({
