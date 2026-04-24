@@ -9,6 +9,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 
 import authRoutes from './routes/auth.js';
+import webhookRoutes from './routes/webhooks.js';
 
 const fastify = Fastify({
   logger: {
@@ -48,6 +49,7 @@ fastify.get('/health', async () => ({
 
 // --- Rotas ---
 await fastify.register(authRoutes, { prefix: '/api/v1' });
+await fastify.register(webhookRoutes, { prefix: '/api/v1' });
 
 // --- Start ---
 const port = Number(process.env.PORT) || 3000;
