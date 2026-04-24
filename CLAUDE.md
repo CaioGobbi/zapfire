@@ -19,6 +19,12 @@
 
 **Repositório Git:** https://github.com/CaioGobbi/zapfire (privado). Branch principal: `main`.
 
+**URLs em produção (Sprint 7):**
+- **Backend**: `https://zapfire-production.up.railway.app` (Railway + Postgres managed)
+- **Painel**: `https://zapfire-five.vercel.app` (Vercel + Next.js 14)
+- **Privacy policy**: `https://zapfire-five.vercel.app/privacy` (pública, usada pra submissão CWS)
+- **Domínio real `zapfire.com.br`**: ainda não comprado — Sprint 8 faz a migração
+
 ## Stack
 
 ### Backend (`/backend`)
@@ -286,6 +292,49 @@ window.postMessage({
 - `docs/kirvano-webhook.md` — schema + payloads de exemplo + how-to-test local (curl + ngrok) + idempotência
 - `docs/email-templates.md` — 5 templates (boas-vindas, renovação, cancelamento, chargeback/refund, magic link): variáveis, estrutura, observações comportamentais, modo mock vs real, débito técnico
 
+### Sprint 7 — COMPLETO (build system + deploy Railway + deploy Vercel + CWS prep)
+
+**Build system da extensão (ETAPA 1):**
+- `extension/build.mjs`: script Node que copia `extension/*` → `dist/extension/`, reescreve `config.js` com URLs de prod (vindas de `ZF_API_BASE` e `ZF_PANEL_URL` env vars), atualiza `host_permissions` do `manifest.json`, minifica JS com esbuild (bundle:false, format:esm, target:chrome120), gera `.zip` pronto pra Chrome Web Store
+- Pasta `vendor/` (WA-JS + opus) NÃO é minificada — código de terceiros preservado
+- `extension/config.js` (novo): exporta `API_BASE` + `PANEL_URL`. Commitado com defaults localhost (dev loads direto sem build)
+- `extension/package.json` (novo): só dev-deps (esbuild ^0.24, archiver ^7). `npm run build` executa o pipeline
+- `service-worker.js` e `lib/grace-banner.js` agora importam URLs do `config.js` (refactor puro, valores iguais)
+- **Escolha consciente**: esbuild minify em vez de `javascript-obfuscator`. Ofuscação pesada arrisca rejeição CWS; minify é policy-compliant
+
+**Backend Railway (ETAPA 2):**
+- `backend/Dockerfile`: Node 20-slim + OpenSSL (dep do Prisma). Build copia package-lock, instala deps, gera Prisma client. CMD roda `prisma migrate deploy` antes de `node src/server.js`
+- `backend/railway.json`: force builder DOCKERFILE (Railway default Railpack falhou no monorepo), healthcheck `/health`, restart ON_FAILURE 10x
+- `backend/.dockerignore`: exclui node_modules, .env, cookies.txt, git
+- Root Directory configurado na UI como `backend` — essencial senão Railpack/Docker tenta buildar do repo root
+- Deploy: Postgres plugin provisionado, `DATABASE_URL` linkada via reference, env vars setadas (JWT_SECRET, KIRVANO_WEBHOOK_TOKEN, PANEL_BASE_URL, PANEL_ORIGINS, ADMIN_*, RESEND_*, NODE_ENV=production, HOST=0.0.0.0)
+- Seed rodou via `DATABASE_URL=<public-url> npm run db:seed` local (Railway internal hostname não resolve fora da rede deles — usar `DATABASE_PUBLIC_URL` pro one-off)
+- `docs/deploy-railway.md`: guia de 10 passos cobrindo criação do projeto, Postgres plugin, env vars, validação com curl, troubleshooting, custos
+
+**Painel Vercel (ETAPA 3):**
+- `web/next.config.mjs`: `eslint.ignoreDuringBuilds: true` — várias flags de estilo (`@typescript-eslint/no-explicit-any`, `no-unused-vars`) bloqueavam build de prod. Fica pra cleanup pass, não afeta runtime
+- `web/app/(public)/primeiro-acesso/page.tsx`: `useSearchParams()` agora wrapped em `<Suspense>` (Next 14 exige pra páginas com querystring dinâmica)
+- `web/app/fonts/`: deletados arquivos Geist órfãos
+- Deploy: Root Directory = `web`, env `NEXT_PUBLIC_API_URL` = URL do Railway /api/v1
+- `docs/deploy-vercel.md`: guia de import, env vars, validação, troubleshooting (CORS, cookies em HTTPS, etc)
+
+**Bug fixes durante integração:**
+- Backend CORS agora normaliza trailing slash (browser manda Origin sem `/`, user pode ter colado URL com `/` no env var — strict equality falhava silenciosamente)
+
+**Integração extensão ↔ prod (ETAPA 4):**
+- `extension/manager/manager.js` + `.html`: botão "Minha conta" no topbar abre `PANEL_URL/dashboard` em nova aba (URL vem do config.js via build)
+- Build prod da extensão gerou `dist/zapfire-extension-0.1.0.zip` (415 KB) com URLs de Railway/Vercel
+- Teste end-to-end em prod: popup cola chave → valida contra Railway → sidebar/quickbar aparecem → envio funciona → admin vê o bind no painel Vercel
+
+**Chrome Web Store prep (ETAPA 5):**
+- `web/app/(public)/privacy/page.tsx`: política de privacidade pública em 10 seções (LGPD-aware). Explicita que conteúdo criado (scripts/áudios/mídias) fica APENAS no IndexedDB local, servidor nunca acessa
+- `docs/chrome-web-store-submission.md`: guia completo pra submeter:
+  - Textos prontos pra colar: nome, summary (132 chars), description longa, single-purpose policy
+  - Justificativa de CADA permissão (CWS rejeita se faltar): storage, activeTab, scripting, alarms, host_permissions, content_scripts
+  - Data usage disclosure checkbox-by-checkbox
+  - Checklist de assets (screenshots e promo tile ainda pendentes)
+  - Passo-a-passo da submissão no dev console + motivos comuns de rejeição
+
 ### Sprint 6 — COMPLETO (backoffice admin + Resend bounce tracking)
 
 **Backend (ETAPA 1–3):**
@@ -368,10 +417,20 @@ window.postMessage({
 - **Painel em porta 3001** (não 3000) pra não conflitar com o backend. Script é `next dev -p 3001`
 - **`.env.example` sempre com placeholders** — nunca commitar token real. `cookies.txt` (residue de curl -c/-b) no `.gitignore`
 
+### Sprint 7 (build + deploy)
+- **Esbuild minify, não `javascript-obfuscator`** — ofuscação pesada arrisca rejeição do CWS policy review. Minify (encurta locais, preserva exports) é o limite seguro
+- **Build replace de URLs via `config.js`** em vez de placeholder-replace. Source commitado com localhost defaults, `build.mjs` sobrescreve no dist/. Dev loads direto sem build
+- **Dockerfile em vez de Nixpacks/Railpack** no Railway: builder auto-detect falhou no monorepo, Dockerfile é determinístico (controla Node version, OpenSSL, CMD). Railway service Root Directory = `backend` é essencial
+- **Railway injeta DATABASE_URL via reference**: `${{Postgres.DATABASE_URL}}`. URL usa `postgres.railway.internal` que só resolve de dentro da rede Railway. Pra seed one-off local, usar `DATABASE_PUBLIC_URL` (proxy TCP público)
+- **`eslint.ignoreDuringBuilds: true`** no painel Vercel. Várias flags de estilo (explicit-any, unused-vars) bloqueavam build de prod. Separar build de lint é padrão na indústria; ESLint continua rodando via `npm run lint` manual/CI
+- **CORS com trailing-slash tolerance**: normaliza ambos os lados antes da comparação. User pode colar `https://painel.com/` no env, browser envia `https://painel.com` sem barra
+- **Content do usuário nunca no servidor**: scripts/áudios/mídias ficam em IndexedDB local. Essa é decisão fundacional (Sprint 3) mas virou ponto de venda na Privacy Policy e no store listing — zero acesso a dados sensíveis do cliente
+- **Screenshots e promo tile 440x280 ainda pendentes** pra submissão CWS
+
 ## Próximos Sprints
 
 - **Sprint 5 (pulado pra frente — fazer quando necessário):** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
-- **Sprint 7:** Ofuscação (`javascript-obfuscator`) dos JS da extensão. Substituir `PANEL_URL` hardcoded em `grace-banner.js` por templating em build. Deploy Render pro backend + Vercel pro painel. Publicação Chrome Web Store. Migrar webhook Resend de token header pra assinatura svix (padrão oficial). Preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `kirvanoParser.js` com IDs reais da Kirvano
+- **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`
 
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
@@ -379,9 +438,14 @@ window.postMessage({
 - Conversão OGG bloqueia UI do manager durante o upload — poderia ser async/progress
 - `tags` e `folder` ainda no schema do IndexedDB mas sem UI — decidir entre remover do storage ou reintroduzir UI
 - Rate limit por email no /login é in-memory Map — vira Redis quando for multi-server
-- Kirvano `offer_id` → plano ainda é fallback por `charge_frequency`. Sprint 5/6: preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `lib/kirvanoParser.js` com os IDs reais da Kirvano
-- Backend tem 6 vulnerabilidades transitivas moderate/high no `resend`. Revisar antes de prod
+- Kirvano `offer_id` → plano ainda é fallback por `charge_frequency`. Sprint 8: preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `lib/kirvanoParser.js` com os IDs reais
+- Backend tem 6 vulnerabilidades transitivas moderate/high no `resend`. Revisar antes de volume alto
 - `audit_logs.metadata` cresce indefinidamente — precisa de política de retenção ou tabela particionada no futuro
+- **ESLint desabilitado no build do Vercel** — várias flags de estilo bloqueavam build (any, unused-vars, unescaped-entities). Fazer cleanup pass quando der tempo
+- **Resend webhook usa token em header**, não assinatura svix. Pra prod sério, migrar pra svix (padrão Resend)
+- **Senha do Postgres Railway foi exposta em chat durante o seed inicial** — rotacionar via UI Railway (service Postgres → Settings → Rotate Password) antes de ficar produção-grave
+- **Domínio não-vanity** (Railway + Vercel) no manifest + nas URLs do painel — Sprint 8 migra pra `zapfire.com.br`
+- **Assets da CWS (screenshots, promo tile 440x280) ainda não capturados** — bloqueio pra submeter
 
 ## Estrutura Atual do Projeto
 
@@ -391,12 +455,18 @@ zapfire/
 ├── README.md
 ├── .gitignore                            ← ignora .env, cookies.txt, node_modules, .crx, .zip
 ├── docs/
-│   └── kirvano-webhook.md                ← schema + payloads de exemplo + how-to-test
-│   └── email-templates.md                ← pendente (ETAPA 8)
+│   ├── kirvano-webhook.md                ← schema + payloads + how-to-test
+│   ├── email-templates.md                ← 5 templates + estrutura + modo mock
+│   ├── deploy-railway.md                 ← guia 10 passos pro backend
+│   ├── deploy-vercel.md                  ← guia pro painel
+│   └── chrome-web-store-submission.md    ← textos prontos + checklist + justificativas de permissões
 │
 ├── backend/                              ← Node.js + Fastify + Prisma + PostgreSQL
 │   ├── .env                              ← gitignored (secrets)
 │   ├── .env.example                      ← placeholders PUBLIC-SAFE
+│   ├── .dockerignore                     ← exclui node_modules, .env, .git do image
+│   ├── Dockerfile                        ← Sprint 7 — Node 20-slim + OpenSSL + prisma migrate deploy
+│   ├── railway.json                      ← builder DOCKERFILE + healthcheck /health
 │   ├── package.json
 │   ├── prisma/
 │   │   ├── schema.prisma                 ← 10 tabelas + 3 enums novos do Sprint 4
@@ -426,6 +496,7 @@ zapfire/
 │   ├── package.json                      ← "dev": "next dev -p 3001"
 │   ├── components.json                   ← config shadcn
 │   ├── tailwind.config.ts                ← palette cypherpunk (zf-accent, zf-type-*)
+│   ├── next.config.mjs                   ← Sprint 7: eslint.ignoreDuringBuilds=true
 │   ├── app/
 │   │   ├── layout.tsx                    ← RootLayout + AuthProvider + Toaster
 │   │   ├── page.tsx                      ← / redireciona pra /dashboard ou /login
@@ -434,7 +505,8 @@ zapfire/
 │   │   ├── (public)/                     ← sem auth
 │   │   │   ├── layout.tsx                ← centralizado + marca Z
 │   │   │   ├── login/page.tsx
-│   │   │   └── primeiro-acesso/page.tsx  ← 2 modos (com/sem ?token=)
+│   │   │   ├── privacy/page.tsx          ← Sprint 7 — LGPD policy pública (URL p/ CWS)
+│   │   │   └── primeiro-acesso/page.tsx  ← 2 modos (com/sem ?token=) + Suspense
 │   │   └── (app)/                        ← requer JWT (gate via bootstrapSession)
 │   │       ├── layout.tsx                ← sidebar 220px + main
 │   │       ├── dashboard/page.tsx        ← chave + subscription + bind + banners
@@ -453,9 +525,15 @@ zapfire/
 │
 └── extension/                            ← Chrome Manifest V3
     ├── manifest.json                     ← múltiplos content_scripts (ISOLATED + MAIN)
+    ├── config.js                         ← Sprint 7 — API_BASE + PANEL_URL (build-replaced)
+    ├── build.mjs                         ← Sprint 7 — esbuild minify + zip pra CWS
+    ├── package.json                      ← Sprint 7 — devDeps (esbuild + archiver)
+    ├── dist/                             ← Sprint 7 — saída do build (gitignored)
+    │   ├── extension/                    ← pasta pronta pra load unpacked ou CWS
+    │   └── zapfire-extension-<v>.zip     ← upload direto no CWS (~415 KB)
     ├── assets/ (ícones 16/48/128)
     ├── background/
-    │   └── service-worker.js             ← auth, heartbeat, rota ZF_OPEN_MANAGER
+    │   └── service-worker.js             ← auth, heartbeat, license state; importa API_BASE
     ├── content/
     │   └── content.js                    ← ISOLATED world em web.whatsapp.com
     ├── main-world/
@@ -463,12 +541,13 @@ zapfire/
     ├── lib/
     │   ├── storage.js                    ← IndexedDB wrapper
     │   ├── sender.js                     ← envio via DOM (fallback)
-    │   └── funnel-engine.js              ← executor de funis paralelos
+    │   ├── funnel-engine.js              ← executor de funis paralelos
+    │   └── grace-banner.js               ← Sprint 4 — banner de grace + gate de envio
     ├── sidebar/                          ← iframe (320px fixed à direita)
     ├── quickbar/                         ← iframe dentro do <footer> do WA
-    ├── manager/                          ← aba dedicada full-screen
+    ├── manager/                          ← aba dedicada full-screen + botão "Minha conta"
     ├── popup/                            ← login/logout + Abrir gerenciador
-    └── vendor/                           ← WA-JS bundle + opus-media-recorder WASM
+    └── vendor/                           ← WA-JS bundle + opus-media-recorder WASM (não minificado)
 ```
 
 ## Convenções de Código
