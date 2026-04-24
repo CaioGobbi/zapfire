@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -21,13 +21,24 @@ import { useAuthStore } from '@/lib/authStore';
 //   - sem token:  formulário "Pedir novo link" (só email)
 // ============================================================
 
-export default function PrimeiroAcessoPage() {
+function PrimeiroAcessoContent() {
   const search = useSearchParams();
   const token = search.get('token') || '';
 
   return token
     ? <ConfigurarSenhaForm token={token} />
     : <PedirLinkForm />;
+}
+
+// useSearchParams() exige Suspense boundary (Next 14+).
+// O fallback é um noop porque o Card é pequeno e a hidratação
+// resolve rápido — sem flash perceptível.
+export default function PrimeiroAcessoPage() {
+  return (
+    <Suspense fallback={null}>
+      <PrimeiroAcessoContent />
+    </Suspense>
+  );
 }
 
 function ConfigurarSenhaForm({ token }: { token: string }) {
