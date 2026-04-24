@@ -1,0 +1,714 @@
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { toast } from 'sonner';
+import {
+  ArrowLeft,
+  RotateCcw,
+  Unlock,
+  Shield,
+  ShieldOff,
+  CalendarPlus,
+  UserCog,
+  Check,
+  Copy,
+} from 'lucide-react';
+
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { formatBRL, formatDate, formatDateTime, formatKey, maskPhone, copyToClipboard } from '@/lib/format';
+
+// ============================================================
+// Types (espelha o retorno do /api/v1/admin/users/:id)
+// ============================================================
+interface UserDetail {
+  id: string;
+  email: string;
+  fullName: string;
+  phone: string | null;
+  cpfCnpj: string | null;
+  role: 'CUSTOMER' | 'AFFILIATE' | 'ADMIN';
+  isActive: boolean;
+  emailVerified: boolean;
+  passwordSetAt: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+interface KeyDetail {
+  id: string;
+  keyValue: string;
+  label: string;
+  boundPhone: string | null;
+  boundAt: string | null;
+  status: 'ACTIVE' | 'SUSPENDED' | 'BLOCKED' | 'EXPIRED';
+  blockedReason: string | null;
+  blockedAt: string | null;
+  lastUsedAt: string | null;
+  resetCount30d: number;
+  resetCount30dResetAt: string | null;
+  lastResetAt: string | null;
+  createdAt: string;
+  devices: Array<{
+    id: string;
+    userAgent: string | null;
+    ipAddress: string | null;
+    lastSeenAt: string;
+  }>;
+  _count: { devices: number; validations: number };
+}
+
+interface SubscriptionDetail {
+  id: string;
+  status: string;
+  gatewayProvider: string;
+  currentPeriodEnd: string;
+  canceledAt: string | null;
+  cancelReason: string | null;
+  autoRenew: boolean;
+  gracePeriodEndsAt: string | null;
+  kirvanoStatus: string | null;
+  createdAt: string;
+  plan: { code: string; name: string; priceCents: number; billingCycle: string };
+}
+
+interface DetailResponse {
+  ok: boolean;
+  user: UserDetail;
+  keys: KeyDetail[];
+  subscriptions: SubscriptionDetail[];
+  recentPayments: Array<{
+    id: string;
+    paidAmountCents: number;
+    status: string;
+    paymentMethod: string | null;
+    paidAt: string | null;
+    createdAt: string;
+  }>;
+  recentValidations: Array<{
+    id: string;
+    result: string;
+    reason: string | null;
+    ipAddress: string;
+    createdAt: string;
+  }>;
+  recentAudit: Array<{
+    id: string;
+    action: string;
+    entityType: string | null;
+    entityId: string | null;
+    metadata: any;
+    ipAddress: string | null;
+    createdAt: string;
+  }>;
+}
+
+const KEY_STATUS_VARIANT: Record<string, 'default' | 'destructive' | 'secondary' | 'outline'> = {
+  ACTIVE: 'default',
+  SUSPENDED: 'secondary',
+  BLOCKED: 'destructive',
+  EXPIRED: 'destructive',
+};
+
+const SUB_STATUS_VARIANT: Record<string, 'default' | 'destructive' | 'secondary' | 'outline'> = {
+  ACTIVE: 'default',
+  CANCELED: 'secondary',
+  PAST_DUE: 'destructive',
+  EXPIRED: 'destructive',
+  BLOCKED: 'destructive',
+  PENDING: 'outline',
+};
+
+// ============================================================
+export default function AdminUserDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const [data, setData] = useState<DetailResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await apiGet<DetailResponse>(`/admin/users/${id}`);
+      setData(res);
+    } catch (err) {
+      console.error('user detail', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-40" />
+        <Skeleton className="h-72" />
+      </div>
+    );
+  }
+
+  if (!data?.user) {
+    return (
+      <div className="space-y-4">
+        <BackLink />
+        <Card><CardContent className="pt-6 text-sm text-muted-foreground">Usuário não encontrado.</CardContent></Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <BackLink />
+      <UserHeader user={data.user} onAction={load} />
+
+      <Tabs defaultValue="keys">
+        <TabsList>
+          <TabsTrigger value="keys">Chaves ({data.keys.length})</TabsTrigger>
+          <TabsTrigger value="subs">Assinaturas ({data.subscriptions.length})</TabsTrigger>
+          <TabsTrigger value="payments">Pagamentos ({data.recentPayments.length})</TabsTrigger>
+          <TabsTrigger value="validations">Validações ({data.recentValidations.length})</TabsTrigger>
+          <TabsTrigger value="audit">Audit ({data.recentAudit.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="keys" className="mt-4 space-y-4">
+          {data.keys.length === 0 ? (
+            <EmptyNote>Nenhuma chave.</EmptyNote>
+          ) : (
+            data.keys.map((k) => <KeyCard key={k.id} k={k} onAction={load} />)
+          )}
+        </TabsContent>
+
+        <TabsContent value="subs" className="mt-4 space-y-4">
+          {data.subscriptions.length === 0 ? (
+            <EmptyNote>Nenhuma assinatura.</EmptyNote>
+          ) : (
+            data.subscriptions.map((s) => <SubCard key={s.id} s={s} onAction={load} />)
+          )}
+        </TabsContent>
+
+        <TabsContent value="payments" className="mt-4">
+          {data.recentPayments.length === 0 ? (
+            <EmptyNote>Sem pagamentos.</EmptyNote>
+          ) : (
+            <Card><CardContent className="pt-6">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Data</TableHead>
+                    <TableHead>Valor</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="hidden sm:table-cell">Método</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.recentPayments.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell className="text-muted-foreground">{formatDateTime(p.paidAt || p.createdAt)}</TableCell>
+                      <TableCell className="font-medium">{formatBRL(p.paidAmountCents)}</TableCell>
+                      <TableCell><Badge variant={p.status === 'PAID' ? 'default' : 'destructive'}>{p.status}</Badge></TableCell>
+                      <TableCell className="hidden sm:table-cell text-muted-foreground text-xs">{p.paymentMethod || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent></Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="validations" className="mt-4">
+          {data.recentValidations.length === 0 ? (
+            <EmptyNote>Sem validações.</EmptyNote>
+          ) : (
+            <Card><CardContent className="pt-6">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Data</TableHead>
+                    <TableHead>Resultado</TableHead>
+                    <TableHead className="hidden md:table-cell">IP</TableHead>
+                    <TableHead className="hidden lg:table-cell">Motivo</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.recentValidations.map((v) => (
+                    <TableRow key={v.id}>
+                      <TableCell className="text-muted-foreground">{formatDateTime(v.createdAt)}</TableCell>
+                      <TableCell><Badge variant={v.result === 'SUCCESS' ? 'default' : 'destructive'}>{v.result}</Badge></TableCell>
+                      <TableCell className="hidden md:table-cell text-muted-foreground font-mono text-xs">{v.ipAddress}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground text-xs">{v.reason || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent></Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="audit" className="mt-4">
+          {data.recentAudit.length === 0 ? (
+            <EmptyNote>Sem registros de audit.</EmptyNote>
+          ) : (
+            <Card><CardContent className="pt-6 space-y-2">
+              {data.recentAudit.map((a) => (
+                <div key={a.id} className="text-xs flex gap-3 py-1 border-b border-border/50 last:border-0">
+                  <span className="text-muted-foreground shrink-0 w-32">{formatDateTime(a.createdAt)}</span>
+                  <span className="font-mono text-zf-accent shrink-0">{a.action}</span>
+                  {a.metadata && Object.keys(a.metadata).length > 0 && (
+                    <code className="text-muted-foreground truncate font-mono text-[10px]">
+                      {JSON.stringify(a.metadata)}
+                    </code>
+                  )}
+                </div>
+              ))}
+            </CardContent></Card>
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ============================================================
+function BackLink() {
+  return (
+    <Link href="/admin/usuarios" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+      <ArrowLeft className="w-4 h-4" /> Voltar pra lista
+    </Link>
+  );
+}
+
+function EmptyNote({ children }: { children: React.ReactNode }) {
+  return (
+    <Card><CardContent className="pt-6 text-sm text-muted-foreground text-center">{children}</CardContent></Card>
+  );
+}
+
+// ============================================================
+function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void }) {
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3 mb-1">
+            <h2 className="text-xl font-semibold truncate">{user.email}</h2>
+            <Badge variant={user.role === 'ADMIN' ? 'default' : 'outline'}>{user.role}</Badge>
+            {!user.isActive && <Badge variant="destructive">Inativo</Badge>}
+            {!user.emailVerified && <Badge variant="outline">Email não verif.</Badge>}
+            {!user.passwordSetAt && <Badge variant="outline">Sem senha</Badge>}
+          </div>
+          <div className="text-sm text-muted-foreground">{user.fullName || '(sem nome)'}</div>
+          <div className="text-xs text-muted-foreground mt-2 space-x-4">
+            <span>Criado: <span className="text-foreground">{formatDateTime(user.createdAt)}</span></span>
+            <span>Último login: <span className="text-foreground">{formatDateTime(user.lastLoginAt)}</span></span>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>
+          <UserCog className="w-4 h-4 mr-2" /> Mudar role
+        </Button>
+      </CardHeader>
+      <PromoteDialog
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+        user={user}
+        onDone={() => { setPromoteOpen(false); onAction(); }}
+      />
+    </Card>
+  );
+}
+
+// ============================================================
+function KeyCard({ k, onAction }: { k: KeyDetail; onAction: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const [blockOpen, setBlockOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function run(label: string, fn: () => Promise<unknown>) {
+    setBusy(label);
+    try {
+      await fn();
+      toast.success('Ação executada');
+      onAction();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Falha — veja console';
+      toast.error(msg);
+    } finally { setBusy(null); }
+  }
+
+  async function onCopy() {
+    if (await copyToClipboard(k.keyValue)) {
+      setCopied(true);
+      toast.success('Chave copiada');
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <Badge variant={KEY_STATUS_VARIANT[k.status] || 'outline'}>{k.status}</Badge>
+            <span className="text-sm text-muted-foreground">{k.label}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="text-xs font-mono text-zf-accent bg-secondary px-2 py-1 rounded truncate max-w-[360px]">
+              {formatKey(k.keyValue)}
+            </code>
+            <Button size="icon" variant="ghost" onClick={onCopy} className="h-7 w-7">
+              {copied ? <Check className="w-3.5 h-3.5 text-zf-success" /> : <Copy className="w-3.5 h-3.5" />}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2 text-sm sm:grid-cols-2 md:grid-cols-3">
+          <InfoRow label="Vinculada a">
+            {k.boundPhone ? maskPhone(k.boundPhone) : <span className="italic text-muted-foreground">—</span>}
+          </InfoRow>
+          <InfoRow label="Bind em">{k.boundAt ? formatDate(k.boundAt) : '—'}</InfoRow>
+          <InfoRow label="Último uso">{k.lastUsedAt ? formatDateTime(k.lastUsedAt) : '—'}</InfoRow>
+          <InfoRow label="Reset 30d">
+            {k.resetCount30d}x
+            {k.resetCount30dResetAt && ` (reset em ${formatDate(k.resetCount30dResetAt)})`}
+          </InfoRow>
+          <InfoRow label="Último reset">{k.lastResetAt ? formatDateTime(k.lastResetAt) : '—'}</InfoRow>
+          <InfoRow label="Devices">{k._count.devices} · Validações: {k._count.validations}</InfoRow>
+        </div>
+
+        {k.blockedReason && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs">
+            <strong className="text-destructive">Bloqueada:</strong> {k.blockedReason}
+            {k.blockedAt && <span className="text-muted-foreground"> · {formatDateTime(k.blockedAt)}</span>}
+          </div>
+        )}
+
+        {k.devices.length > 0 && (
+          <details className="text-xs">
+            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+              {k.devices.length} dispositivo(s)
+            </summary>
+            <div className="mt-2 space-y-1 pl-4">
+              {k.devices.map((d) => (
+                <div key={d.id} className="text-muted-foreground">
+                  {summarizeUa(d.userAgent)} · {d.ipAddress || '?'} · {formatDateTime(d.lastSeenAt)}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        <div className="flex flex-wrap gap-2 pt-2 border-t border-border/50">
+          <Button
+            size="sm" variant="outline"
+            disabled={!!busy}
+            onClick={() => run('reset-bind', () => apiPost(`/admin/keys/${k.id}/reset-bind`))}
+          >
+            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+            Reset bind
+          </Button>
+          <Button
+            size="sm" variant="outline"
+            disabled={!!busy || k.resetCount30d === 0}
+            onClick={() => run('unlock-reset', () => apiPost(`/admin/keys/${k.id}/unlock-reset`))}
+          >
+            <Unlock className="w-3.5 h-3.5 mr-1.5" />
+            Liberar reset do mês
+          </Button>
+          {k.status === 'BLOCKED' ? (
+            <Button
+              size="sm" variant="outline"
+              disabled={!!busy}
+              onClick={() => run('unblock', () => apiPost(`/admin/keys/${k.id}/unblock`))}
+            >
+              <ShieldOff className="w-3.5 h-3.5 mr-1.5" />
+              Desbloquear
+            </Button>
+          ) : (
+            <Button
+              size="sm" variant="outline"
+              disabled={!!busy}
+              onClick={() => setBlockOpen(true)}
+            >
+              <Shield className="w-3.5 h-3.5 mr-1.5" />
+              Bloquear
+            </Button>
+          )}
+        </div>
+      </CardContent>
+
+      <BlockKeyDialog
+        open={blockOpen}
+        onOpenChange={setBlockOpen}
+        keyId={k.id}
+        onDone={() => { setBlockOpen(false); onAction(); }}
+      />
+    </Card>
+  );
+}
+
+// ============================================================
+function SubCard({ s, onAction }: { s: SubscriptionDetail; onAction: () => void }) {
+  const [extendOpen, setExtendOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Badge variant={SUB_STATUS_VARIANT[s.status] || 'outline'}>{s.status}</Badge>
+            <span className="font-medium">{s.plan.name}</span>
+            <span className="text-sm text-muted-foreground">{formatBRL(s.plan.priceCents)}</span>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Gateway: <span className="text-foreground">{s.gatewayProvider}</span>
+            {s.kirvanoStatus && <> · Kirvano: <span className="text-foreground">{s.kirvanoStatus}</span></>}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2 text-sm sm:grid-cols-3">
+          <InfoRow label="Vence em">{formatDate(s.currentPeriodEnd)}</InfoRow>
+          <InfoRow label="Cancelada em">{s.canceledAt ? formatDate(s.canceledAt) : '—'}</InfoRow>
+          <InfoRow label="Renovação">{s.autoRenew ? 'Auto' : 'Manual'}</InfoRow>
+        </div>
+        {s.cancelReason && (
+          <div className="text-xs text-muted-foreground">
+            Motivo: <span className="text-foreground">{s.cancelReason}</span>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 pt-2 border-t border-border/50">
+          <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)}>
+            <CalendarPlus className="w-3.5 h-3.5 mr-1.5" />
+            Estender
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setStatusOpen(true)}>
+            Mudar status
+          </Button>
+        </div>
+      </CardContent>
+
+      <ExtendDialog
+        open={extendOpen} onOpenChange={setExtendOpen}
+        subId={s.id} currentEnd={s.currentPeriodEnd}
+        onDone={() => { setExtendOpen(false); onAction(); }}
+      />
+      <SetStatusDialog
+        open={statusOpen} onOpenChange={setStatusOpen}
+        subId={s.id} currentStatus={s.status}
+        onDone={() => { setStatusOpen(false); onAction(); }}
+      />
+    </Card>
+  );
+}
+
+function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-foreground text-sm">{children}</span>
+    </div>
+  );
+}
+
+function summarizeUa(ua: string | null): string {
+  if (!ua) return 'Desconhecido';
+  if (/Edg\//.test(ua)) return 'Edge';
+  if (/Chrome\//.test(ua)) return 'Chrome';
+  if (/Firefox\//.test(ua)) return 'Firefox';
+  if (/Safari\//.test(ua)) return 'Safari';
+  return ua.slice(0, 30);
+}
+
+// ============================================================
+// Dialogs de ação
+// ============================================================
+function BlockKeyDialog({ open, onOpenChange, keyId, onDone }: any) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    try {
+      await apiPost(`/admin/keys/${keyId}/block`, { reason: reason.trim() || undefined });
+      toast.success('Chave bloqueada');
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Bloquear chave</DialogTitle>
+          <DialogDescription>
+            A chave fica imediatamente inválida. O user vê "Envios bloqueados" na extensão.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="reason">Motivo (opcional)</Label>
+          <Input
+            id="reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ex: compartilhamento indevido"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Bloqueando…' : 'Bloquear'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExtendDialog({ open, onOpenChange, subId, currentEnd, onDone }: any) {
+  const [days, setDays] = useState<string>('30');
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    const n = parseInt(days, 10);
+    if (!Number.isFinite(n) || n < 1) { toast.error('Quantidade inválida'); return; }
+    setBusy(true);
+    try {
+      await apiPost(`/admin/subscriptions/${subId}/extend`, { days: n });
+      toast.success(`Estendida em ${n} dias`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Estender assinatura</DialogTitle>
+          <DialogDescription>
+            Vencimento atual: <strong>{formatDate(currentEnd)}</strong>. Se estiver EXPIRED, reativa pra ACTIVE.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="days">Dias</Label>
+          <Input id="days" type="number" min={1} max={3650} value={days} onChange={(e) => setDays(e.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Estendendo…' : 'Estender'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SetStatusDialog({ open, onOpenChange, subId, currentStatus, onDone }: any) {
+  const [status, setStatus] = useState(currentStatus);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    try {
+      await apiPost(`/admin/subscriptions/${subId}/set-status`, {
+        status,
+        reason: reason.trim() || undefined,
+      });
+      toast.success('Status atualizado');
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+  const options = ['PENDING', 'ACTIVE', 'PAST_DUE', 'CANCELED', 'EXPIRED', 'BLOCKED'];
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Mudar status</DialogTitle>
+          <DialogDescription>
+            Status atual: <strong>{currentStatus}</strong>.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="status">Novo status</Label>
+            <select
+              id="status"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              {options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          {status === 'CANCELED' && (
+            <div className="space-y-2">
+              <Label htmlFor="reason">Motivo (opcional)</Label>
+              <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Atualizando…' : 'Atualizar'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PromoteDialog({ open, onOpenChange, user, onDone }: any) {
+  const [role, setRole] = useState(user.role);
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    try {
+      await apiPost(`/admin/users/${user.id}/promote`, { role });
+      toast.success(`Role alterada pra ${role}`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+  const options = ['CUSTOMER', 'AFFILIATE', 'ADMIN'];
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Mudar role</DialogTitle>
+          <DialogDescription>
+            Role atual: <strong>{user.role}</strong>. Cuidado ao rebaixar outros admins.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="role">Novo role</Label>
+          <select
+            id="role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            {options.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Atualizando…' : 'Atualizar'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

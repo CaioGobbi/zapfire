@@ -3,7 +3,7 @@
 import { ReactNode, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { LayoutDashboard, CreditCard, Laptop, History, LogOut } from 'lucide-react';
+import { LayoutDashboard, CreditCard, Laptop, History, LogOut, ShieldAlert } from 'lucide-react';
 
 import { useAuthStore } from '@/lib/authStore';
 import { logout } from '@/lib/auth';
@@ -87,6 +87,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="p-3 border-t border-border">
+          {user?.role === 'ADMIN' && (
+            <Link
+              href="/admin"
+              className="flex items-center gap-3 px-3 py-2 mb-2 rounded-md text-sm text-zf-accent hover:bg-zf-accent/10 transition-colors"
+            >
+              <ShieldAlert className="w-4 h-4" /> Backoffice admin
+            </Link>
+          )}
           <div className="px-2 pb-2 text-xs text-muted-foreground truncate">
             {user?.email}
           </div>
