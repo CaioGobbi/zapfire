@@ -18,6 +18,12 @@ import {
   listFunnels,
   incrementItemUses,
 } from '../lib/storage.js';
+import {
+  subscribeLicenseState,
+  renderBannerInto,
+  canSend,
+  isBlocked,
+} from '../lib/grace-banner.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,6 +32,8 @@ const state = {
   chatName: null,
   items: [],
   funnels: [],
+  // Sprint 4 — license state (null = permissivo até primeiro validate)
+  license: null,
 };
 
 // ------------------------------------------------------------
@@ -168,12 +176,17 @@ function chipFor(item, badge, groupKey) {
 }
 
 function updateChipStates() {
-  const enabled = state.chatOpen;
+  const blocked = isBlocked(state.license);
+  const enabled = state.chatOpen && !blocked;
   document.querySelectorAll('.chip').forEach((btn) => {
     btn.disabled = !enabled;
-    btn.title = enabled
-      ? btn.title.split('\n\n')[0] // reseta só pro nome se tinha tooltip
-      : 'Abra uma conversa primeiro';
+    if (blocked) {
+      btn.title = 'Envios bloqueados — renove sua assinatura';
+    } else {
+      btn.title = state.chatOpen
+        ? btn.title.split('\n\n')[0]
+        : 'Abra uma conversa primeiro';
+    }
   });
 }
 
@@ -181,6 +194,11 @@ function updateChipStates() {
 // Envio
 // ------------------------------------------------------------
 async function handleClick(item, kind) {
+  // Gate de licença (Sprint 4 ETAPA 7)
+  if (!canSend(state.license)) {
+    toast('Assinatura indisponível — renove pra continuar', 'error');
+    return;
+  }
   if (!state.chatOpen) {
     toast('Abra uma conversa primeiro', 'warning');
     return;
@@ -240,9 +258,34 @@ async function handleClick(item, kind) {
 }
 
 // ------------------------------------------------------------
+// License state (Sprint 4) — observa chrome.storage e:
+//   - blocked: mostra banner compacto + esconde chips
+//   - grace: sem banner no quickbar (espaço apertado; banner
+//           aparece na sidebar/popup). Chips continuam ativos.
+//   - ok/null: tudo normal
+// ------------------------------------------------------------
+function applyLicenseUI(lic) {
+  const banner = document.getElementById('license-banner');
+  const qb = document.querySelector('.qb');
+  if (isBlocked(lic)) {
+    renderBannerInto(banner, lic, { compact: true });
+    qb?.classList.add('qb--blocked');
+  } else {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    qb?.classList.remove('qb--blocked');
+  }
+  updateChipStates();
+}
+
+// ------------------------------------------------------------
 // Bootstrap
 // ------------------------------------------------------------
 (async () => {
   await loadAndRender();
+  subscribeLicenseState((lic) => {
+    state.license = lic;
+    applyLicenseUI(lic);
+  });
   callParent('ZF_QUERY_CHAT_STATE', {}).catch(() => {});
 })();

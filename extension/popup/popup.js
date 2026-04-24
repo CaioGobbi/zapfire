@@ -2,6 +2,13 @@
 // ZAPFIRE — Popup
 // ============================================================
 
+import {
+  subscribeLicenseState,
+  renderBannerInto,
+  isInGrace,
+  isBlocked,
+} from '../lib/grace-banner.js';
+
 const $ = (id) => document.getElementById(id);
 
 const screens = {
@@ -49,6 +56,25 @@ function renderAuthScreen(data) {
   $('auth-plan').textContent = data.plan?.name || '—';
   $('auth-expires').textContent = formatDate(data.expiresAt);
   showScreen('auth');
+}
+
+// Sprint 4 — atualiza o badge de status do card conforme o license state.
+// "Ativa" (verde) por padrão; "Aviso" (amarelo) em grace; "Bloqueada" (vermelho)
+// quando EXPIRED/BLOCKED/etc.
+function paintStatusBadge(lic) {
+  const badge = $('auth-status-badge');
+  if (!badge) return;
+  badge.classList.remove('success', 'warning', 'danger');
+  if (isBlocked(lic)) {
+    badge.classList.add('danger');
+    badge.textContent = 'Bloqueada';
+  } else if (isInGrace(lic)) {
+    badge.classList.add('warning');
+    badge.textContent = 'Aviso';
+  } else {
+    badge.classList.add('success');
+    badge.textContent = 'Ativa';
+  }
 }
 
 // ------------------------------------------------------------
@@ -152,6 +178,15 @@ $('btn-logout').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'ZF_LOGOUT' });
   $('input-key').value = '';
   showScreen('login');
+});
+
+// Sprint 4 — subscribe no license state: repinta banner + badge.
+// Roda sempre (tela login também lê, mas renderBannerInto só emite
+// HTML se state tiver conteúdo e o banner é filho de #screen-auth,
+// então só aparece quando a tela auth estiver ativa)
+subscribeLicenseState((lic) => {
+  renderBannerInto($('license-banner'), lic);
+  paintStatusBadge(lic);
 });
 
 init();

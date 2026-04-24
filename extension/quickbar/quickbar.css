@@ -46,6 +46,20 @@ html, body {
   align-items: center;
 }
 
+/* Sprint 4 — slot do banner de licença bloqueada.
+   Quando visível, esconde os chips (o gate já bloqueou o envio de qualquer jeito). */
+.qb-license {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+.qb-license[hidden] {
+  display: none;
+}
+.qb.qb--blocked .qb-list {
+  display: none;
+}
+
 .qb-list {
   display: flex;
   gap: 6px;

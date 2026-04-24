@@ -29,6 +29,13 @@ import {
   incrementItemUses,
 } from '../lib/storage.js';
 import { runFunnel } from '../lib/funnel-engine.js';
+import {
+  subscribeLicenseState,
+  renderBannerInto,
+  canSend,
+  isBlocked,
+  blockReason,
+} from '../lib/grace-banner.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +51,9 @@ const state = {
   // RunInfo: { runId, funnelId, funnelName, totalSteps, target, cancel,
   //            phase, current, status, progressPct, countdownTimer }
   activeRuns: new Map(),
+  // Sprint 4 — estado da licença (atualizado via chrome.storage.onChanged).
+  // null = ainda não carregou (permissivo até primeiro validate).
+  license: null,
 };
 
 const TAB_FILTERS = {
@@ -167,10 +177,14 @@ function updateChatLabel() {
 }
 
 function updateSendButtons() {
+  const blocked = isBlocked(state.license);
+  const blockMsg = blocked
+    ? 'Envios bloqueados — renove sua assinatura'
+    : null;
   document.querySelectorAll('.card-btn.primary').forEach((btn) => {
     if (btn.dataset.alwaysOn === '1') return; // botões em activity não dependem
-    btn.disabled = !state.chatOpen;
-    btn.title = state.chatOpen ? '' : 'Abra uma conversa primeiro';
+    btn.disabled = !state.chatOpen || blocked;
+    btn.title = blockMsg || (state.chatOpen ? '' : 'Abra uma conversa primeiro');
   });
 }
 
@@ -492,6 +506,13 @@ function formatDuration(secs) {
 // Envio avulso (1 item)
 // ------------------------------------------------------------
 async function handleSendItem(item) {
+  // Gate de licença (Sprint 4 ETAPA 7) — bloqueio client-side minimalista.
+  // Validação de verdade é server-side; isso é só pra feedback imediato.
+  if (!canSend(state.license)) {
+    globalToast('Assinatura indisponível — renove pra continuar enviando', 'error');
+    return;
+  }
+
   if (!state.chatOpen) {
     toast('Abra uma conversa primeiro', 'warning');
     return;
@@ -652,6 +673,12 @@ async function sendItemViaParent(item) {
 }
 
 async function handleRunFunnel(funnel) {
+  // Gate de licença (Sprint 4 ETAPA 7)
+  if (!canSend(state.license)) {
+    globalToast('Assinatura indisponível — renove pra executar funis', 'error');
+    return;
+  }
+
   if (!state.chatOpen) {
     toast('Abra uma conversa primeiro', 'warning');
     return;
@@ -847,6 +874,15 @@ async function init() {
   $('search').addEventListener('input', (e) => {
     state.search = e.target.value.trim();
     renderList();
+  });
+
+  // Sprint 4 — license banner: observa chrome.storage e repinta
+  // o banner + atualiza botões sempre que o state muda.
+  const banner = $('license-banner');
+  subscribeLicenseState((lic) => {
+    state.license = lic;
+    renderBannerInto(banner, lic);
+    updateSendButtons();
   });
 
   setActiveTab(state.activeTab);

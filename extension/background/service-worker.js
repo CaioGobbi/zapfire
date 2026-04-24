@@ -17,7 +17,25 @@ const STORAGE_KEYS = {
   DEVICE_ID: 'zf_device_id',
   AUTH_STATE: 'zf_auth_state',
   LAST_VALIDATED: 'zf_last_validated',
+  // Sprint 4 — estado da licença (code, warning GRACE_PERIOD, daysLeft, etc).
+  // Populado após cada /auth/validate + /heartbeat. Consumido pelo banner
+  // de grace e pelo gate de envio client-side (sidebar, quickbar, popup).
+  LICENSE_STATE: 'zf_license_state',
 };
+
+// Converte a resposta do /auth/validate (sucesso ou falha) no shape
+// canônico que o grace-banner.js consome. Função pura, sem side effects.
+function buildLicenseState(validateResponse) {
+  if (!validateResponse) return null;
+  return {
+    code: validateResponse.code || null,
+    warning: validateResponse.warning || null,
+    graceEndsAt: validateResponse.data?.graceEndsAt || null,
+    daysLeft: validateResponse.data?.daysLeft ?? null,
+    phone: validateResponse.data?.boundPhone || null,
+    lastCheckedAt: Date.now(),
+  };
+}
 
 // ------------------------------------------------------------
 // DEVICE ID — gerado uma vez por instalação da extensão,
@@ -63,8 +81,16 @@ async function validateKey({ keyValue, phone }) {
       });
     }
 
+    // Sprint 4 — sempre atualiza o license state (sucesso OU erro).
+    // Tudo que é reativo (banner de grace na sidebar/popup, gate de
+    // envio client-side) observa essa chave via chrome.storage.onChanged.
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.LICENSE_STATE]: buildLicenseState(data),
+    });
+
     return data;
   } catch (err) {
+    // Erro de rede — não mexe no license state (mantém último conhecido)
     return {
       ok: false,
       code: 'NETWORK_ERROR',
@@ -141,6 +167,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           STORAGE_KEYS.KEY_VALUE,
           STORAGE_KEYS.AUTH_STATE,
           STORAGE_KEYS.LAST_VALIDATED,
+          STORAGE_KEYS.LICENSE_STATE,
         ]);
         // Nota: deviceId NÃO é removido — ele persiste entre logins
         sendResponse({ ok: true });

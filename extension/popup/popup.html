@@ -15,6 +15,8 @@
       --accent: #ff3b30;
       --accent-glow: rgba(255, 59, 48, 0.15);
       --success: #10b981;
+      --warning: #ff6b00;
+      --danger:  #dc2626;
     }
 
     body {
@@ -139,6 +141,14 @@
       background: rgba(16, 185, 129, 0.15);
       color: var(--success);
     }
+    .badge.warning {
+      background: rgba(255, 107, 0, 0.15);
+      color: var(--warning);
+    }
+    .badge.danger {
+      background: rgba(220, 38, 38, 0.15);
+      color: var(--danger);
+    }
 
     .help-link {
       text-align: center;
@@ -181,10 +191,13 @@
 
     <!-- =================== AUTHENTICATED =================== -->
     <div class="screen" id="screen-auth">
+      <!-- Sprint 4 — banner de grace/blocked, aparece quando license state requer -->
+      <div id="license-banner" hidden></div>
+
       <div class="status-card">
         <div class="status-row">
           <span class="status-key">Status</span>
-          <span class="badge success">Ativa</span>
+          <span class="badge success" id="auth-status-badge">Ativa</span>
         </div>
         <div class="status-row">
           <span class="status-key">Conta</span>
@@ -209,6 +222,6 @@
     </div>
   </div>
 
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>
