@@ -134,9 +134,14 @@ export default async function webhookRoutes(fastify) {
       },
     },
     async (request, reply) => {
-      // 1. Auth — header X-Kirvano-Token tem que bater com env
+      // 1. Auth — header `security-token` tem que bater com env
+      // (descoberto empiricamente em 2026-04-26: a Kirvano usa o nome
+      // `security-token`, não `X-Kirvano-Token` como assumimos antes;
+      // a doc oficial só diz "Token: opcional" sem revelar o header.
+      // ATENÇÃO: o botão "Testar Integração" do painel Kirvano NÃO
+      // envia o token — só eventos reais incluem o header.)
       const expectedToken = process.env.KIRVANO_WEBHOOK_TOKEN;
-      const receivedToken = request.headers['x-kirvano-token'];
+      const receivedToken = request.headers['security-token'];
 
       if (!expectedToken) {
         // Sem env configurada = rejeita tudo (fail-secure)
@@ -144,25 +149,10 @@ export default async function webhookRoutes(fastify) {
         return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
       }
       if (!receivedToken || receivedToken !== expectedToken) {
-        // NÃO loga o VALOR de nenhum header (token poderia vazar em arquivos de log)
-        // mas loga os NOMES dos headers recebidos pra debuggar onde a Kirvano tá
-        // mandando o token (pode ser X-Webhook-Secret, Authorization, etc — nossa
-        // suposição original era X-Kirvano-Token mas a doc não confirma).
-        // TODO(remover-após-confirmar): debug do nome do header de auth da Kirvano.
+        // NÃO loga o VALOR do token (poderia vazar em arquivos de log)
         const ipAddress =
           request.headers['x-forwarded-for']?.split(',')[0].trim() || request.ip;
-        const headerNames = Object.keys(request.headers).sort();
-        fastify.log.warn({
-          msg: 'webhook kirvano: token inválido',
-          ipAddress,
-          headerNames,                                // só nomes
-          hadXKirvanoToken: !!request.headers['x-kirvano-token'],
-          hadAuthorization: !!request.headers['authorization'],
-          tokenLengthMatches: !!receivedToken && receivedToken.length === expectedToken.length,
-          // bodyHasToken: o token pode vir no JSON do body
-          bodyTokenKeys: ['token', 'secret', 'webhook_token', 'webhook_secret']
-            .filter((k) => typeof request.body?.[k] === 'string'),
-        });
+        fastify.log.warn({ msg: 'webhook kirvano: token inválido', ipAddress });
         return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
       }
 

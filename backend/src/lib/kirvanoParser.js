@@ -96,12 +96,16 @@ export function mapKirvanoEvent(event) {
 //   3. Redeploy do backend
 //   (Sprint 6 débito: fazer isso via config/env pra evitar redeploy)
 // ------------------------------------------------------------
+// Offer IDs reais (descobertos do payload de SALE_APPROVED real).
+// Quando a Kirvano cria uma nova oferta (ex: promoção, A/B test), tem
+// que adicionar o id aqui — caso contrário, cai no fallback por
+// charge_frequency (que ainda funciona pra recorrente padrão, mas é
+// menos preciso pra promoções one-time).
 const ANNUAL_OFFER_IDS = new Set([
-  // TODO: preencher com offer_id real da Kirvano pro plano anual
-  // Ex: 'abc12345-6789-...'
+  '7b80209b-9bb7-43f1-95a0-346a6fe35fd5', // "Plano Anual - ZapFire" (R$395)
 ]);
 const MONTHLY_OFFER_IDS = new Set([
-  // TODO: preencher com offer_id real da Kirvano pro plano mensal
+  '10eb5393-19a0-4894-ab70-292b49b5c84c', // "Plano Mensal - ZapFire" (R$47)
 ]);
 
 export function resolvePlanCode({ offerId, chargeFrequency }) {

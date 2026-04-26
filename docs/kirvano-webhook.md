@@ -1,12 +1,34 @@
 # Webhook Kirvano — integração Zapfire
 
-> **Status**: schema implementado com base em padrão típico de gateways brasileiros. Conferir contra payload real da Kirvano quando o primeiro evento chegar em prod e ajustar `backend/src/routes/webhooks.js` + este arquivo. Campos `event`, `sale_id`, `customer.email` e `total_price` são considerados obrigatórios; o resto é tolerante.
+> **Status**: validado contra payloads reais da Kirvano em prod (2026-04-26). Schema base no `backend/src/routes/webhooks.js` aceita os 8 eventos documentados (BANK_SLIP_*, PIX_*, SALE_APPROVED/REFUSED/CHARGEBACK). Campos `event`, `sale_id`, `customer.email` e `total_price` são considerados obrigatórios; o resto é tolerante via `.passthrough()`.
 
-- **Doc oficial**: https://kirvano.com/api/docs/webhooks (verificar URL exata)
+- **Doc oficial**: https://help.kirvano.com/hc/central-de-ajuda/articles/1765385505-configurando-integracao-via-webhook
 - **Endpoint nosso**: `POST /api/v1/webhooks/kirvano`
-- **Autenticação**: header `X-Kirvano-Token` igual à variável `KIRVANO_WEBHOOK_TOKEN` do backend. Token errado/ausente → `401`. Qualquer outro erro → `200` (pra Kirvano não entrar em retry loop).
+- **Autenticação**: header **`security-token`** igual à variável `KIRVANO_WEBHOOK_TOKEN` do backend. Token errado/ausente → `401`. Qualquer outro erro → `200` (pra Kirvano não entrar em retry loop).
+  - ⚠ A doc da Kirvano **não revela** o nome do header — descoberto empiricamente. Original: assumimos `X-Kirvano-Token` (errado).
+  - ⚠ O botão **"Testar Integração"** do painel Kirvano **NÃO inclui o token** na request — só serve pra checar conectividade. Pra testar a auth de verdade, faz uma compra real (cupom 100% off ou oferta R$1).
 - **Idempotência**: por `kirvanoSaleId` (campo `sale_id` do payload). Se já existe um `Payment` com esse saleId, o evento é ignorado e respondemos 200.
 - **Rate limit**: 120 req/min por IP.
+
+## Padronização de campos
+
+A Kirvano mistura `snake_case` e `camelCase` no mesmo payload sem critério aparente:
+
+- snake: `sale_id`, `payment_method`, `total_price`, `event_description`, `is_order_bump`, `offer_id`, `created_at`, `phone_number`
+- camel: `contactEmail`, `couponDiscount`, `automaticDiscount`, `affiliateCommission`, `coproductionCommission`
+
+Não impacta nada (Zod `.passthrough()` aceita), mas vale saber.
+
+## Offer IDs em produção
+
+Os IDs reais estão em [`backend/src/lib/kirvanoParser.js`](../backend/src/lib/kirvanoParser.js):
+
+| Plano | offer_id (Kirvano) | Plan code interno |
+|---|---|---|
+| Plano Mensal - ZapFire (R$47) | `10eb5393-19a0-4894-ab70-292b49b5c84c` | `monthly_v1` |
+| Plano Anual - ZapFire (R$395) | `7b80209b-9bb7-43f1-95a0-346a6fe35fd5` | `annual_v1` |
+
+Quando criar nova oferta (promoção, A/B test, etc), adicionar o offer_id na Set correspondente em `kirvanoParser.js` e fazer redeploy. Caso contrário cai no fallback por `charge_frequency` (ANNUALLY → annual_v1; resto → monthly_v1) — funciona pra recorrente padrão mas é menos preciso pra one-time.
 
 ## Tabela de eventos
 
