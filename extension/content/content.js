@@ -989,5 +989,34 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-// Bootstrap
+// Bootstrap inicial: roda quando a página carrega.
+// Se a chave NÃO estiver ativa nesse momento, o init mostra o banner
+// "Zapfire não ativado" e sai. O listener abaixo cobre o caso de
+// ativação posterior (popup → ZF_VALIDATE → service-worker salva
+// zf_key) sem precisar refresh manual da aba.
 init();
+
+// Re-inicializa quando a chave é ativada/trocada via popup ou painel.
+// mountSidebar/mountQuickbar já são idempotentes (early-return se
+// iframe já existe), então chamar init() de novo é seguro.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+
+  const keyChange = changes.zf_key;
+  if (!keyChange) return;
+
+  // Só dispara em "ativação" (undefined → valor) ou "troca de chave"
+  // (valor A → valor B). Ignora "logout" (valor → undefined) por ora —
+  // desmontar UI no logout fica como melhoria futura se virar pedido.
+  const newKey = keyChange.newValue;
+  const oldKey = keyChange.oldValue;
+  if (!newKey || newKey === oldKey) return;
+
+  console.log('[Zapfire] Chave ativada/trocada — reinicializando sem refresh');
+
+  // Remove o banner "Zapfire não ativado" / "bloqueado" se ainda visível
+  const banner = document.getElementById('zapfire-banner');
+  if (banner) banner.remove();
+
+  init();
+});
