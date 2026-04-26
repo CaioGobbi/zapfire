@@ -169,7 +169,7 @@ function showBanner({ title, message, type = 'info' }) {
 const SIDEBAR_IFRAME_ID = 'zapfire-sidebar-iframe';
 const SIDEBAR_TOGGLE_ID = 'zapfire-toggle';
 const QUICKBAR_IFRAME_ID = 'zapfire-quickbar-iframe';
-const QUICKBAR_HEIGHT = 44;
+const QUICKBAR_HEIGHT = 48;
 
 let sidebarIframe = null;
 let quickbarIframe = null;

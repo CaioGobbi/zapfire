@@ -279,10 +279,34 @@ function applyLicenseUI(lic) {
 }
 
 // ------------------------------------------------------------
+// Scroll horizontal com a roda do mouse
+// ------------------------------------------------------------
+// Por padrão, scroll vertical numa lista flexbox horizontal não move
+// nada (deltaY → scroll vertical, mas .qb-list não tem altura pra
+// rolar). Capturamos o wheel e convertemos pra scrollLeft, dando UX
+// natural — o user usa o mouse normal sem precisar shift+scroll.
+// passive: false é necessário pra preventDefault funcionar.
+function attachHorizontalWheelScroll(el) {
+  el.addEventListener(
+    'wheel',
+    (e) => {
+      // Se o user já está fazendo um scroll horizontal explícito
+      // (touchpad com shift, mouse com tilt-wheel), respeita.
+      if (e.deltaX !== 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    },
+    { passive: false }
+  );
+}
+
+// ------------------------------------------------------------
 // Bootstrap
 // ------------------------------------------------------------
 (async () => {
   await loadAndRender();
+  attachHorizontalWheelScroll($('list'));
   subscribeLicenseState((lic) => {
     state.license = lic;
     applyLicenseUI(lic);

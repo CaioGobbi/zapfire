@@ -62,49 +62,73 @@ html, body {
 
 .qb-list {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   flex: 1;
   height: 100%;
   align-items: center;
-  padding: 4px 0;
+  padding: 4px 0 6px;
+  /* Scrollbar mais clicável (8px em vez de 4px) e visível só em hover
+     pra não competir visualmente com os chips. */
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
 }
-.qb-list::-webkit-scrollbar { height: 4px; }
+.qb-list:hover {
+  scrollbar-color: var(--border-hover) transparent;
+}
+.qb-list::-webkit-scrollbar { height: 8px; }
 .qb-list::-webkit-scrollbar-track { background: transparent; }
-.qb-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.qb-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+.qb-list:hover::-webkit-scrollbar-thumb { background: var(--border); }
+.qb-list::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border);
-  border-radius: 16px;
-  padding: 5px 10px 5px 8px;
+  border-radius: 8px;
+  padding: 6px 12px 6px 10px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s, box-shadow 0.12s;
   flex-shrink: 0;
-  max-width: 180px;
+  max-width: 220px;
   overflow: hidden;
-  height: 28px;
+  height: 32px;
 }
 .chip:hover:not(:disabled) {
   background: var(--bg-hover);
   border-top-color: var(--border-hover);
   border-right-color: var(--border-hover);
   border-bottom-color: var(--border-hover);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+.chip:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .chip:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Glow sutil no hover, colorido pelo tipo */
+.chip--funnel:hover:not(:disabled) { box-shadow: 0 2px 10px var(--accent-glow); }
+.chip--text:hover:not(:disabled)   { box-shadow: 0 2px 10px var(--type-text-bg); }
+.chip--audio:hover:not(:disabled)  { box-shadow: 0 2px 10px var(--type-audio-bg); }
+.chip--media:hover:not(:disabled)  { box-shadow: 0 2px 10px var(--type-media-bg); }
 
 /* Cores por tipo na borda esquerda */
 .chip--funnel { border-left-color: var(--type-funnel); }
