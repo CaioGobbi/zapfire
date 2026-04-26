@@ -144,10 +144,25 @@ export default async function webhookRoutes(fastify) {
         return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
       }
       if (!receivedToken || receivedToken !== expectedToken) {
-        // NÃO loga o token recebido (poderia vazar em arquivos de log)
+        // NÃO loga o VALOR de nenhum header (token poderia vazar em arquivos de log)
+        // mas loga os NOMES dos headers recebidos pra debuggar onde a Kirvano tá
+        // mandando o token (pode ser X-Webhook-Secret, Authorization, etc — nossa
+        // suposição original era X-Kirvano-Token mas a doc não confirma).
+        // TODO(remover-após-confirmar): debug do nome do header de auth da Kirvano.
         const ipAddress =
           request.headers['x-forwarded-for']?.split(',')[0].trim() || request.ip;
-        fastify.log.warn({ msg: 'webhook kirvano: token inválido', ipAddress });
+        const headerNames = Object.keys(request.headers).sort();
+        fastify.log.warn({
+          msg: 'webhook kirvano: token inválido',
+          ipAddress,
+          headerNames,                                // só nomes
+          hadXKirvanoToken: !!request.headers['x-kirvano-token'],
+          hadAuthorization: !!request.headers['authorization'],
+          tokenLengthMatches: !!receivedToken && receivedToken.length === expectedToken.length,
+          // bodyHasToken: o token pode vir no JSON do body
+          bodyTokenKeys: ['token', 'secret', 'webhook_token', 'webhook_secret']
+            .filter((k) => typeof request.body?.[k] === 'string'),
+        });
         return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
       }
 
