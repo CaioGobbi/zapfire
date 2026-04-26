@@ -71,13 +71,18 @@ function hitEmailRateLimit(email, maxPerHour = 10) {
 // Cookie options
 // ------------------------------------------------------------
 function refreshCookieOpts() {
-  // SameSite=Lax: envia em navegações top-level + fetch same-site.
-  // Nosso setup (:3001 ↔ :3000) é same-site (ambos localhost), então Lax
-  // atende. Strict era bloqueado em alguns cenários de bootstrap por F5.
+  const isProd = process.env.NODE_ENV === 'production';
+  // Em DEV (:3001 ↔ :3000) ambos são localhost = same-site → Lax atende
+  // e funciona sem HTTPS (Secure só seria possível com Lax/None+HTTPS).
+  // Em PROD o painel (vercel.app) e backend (railway.app) ficam em
+  // sites diferentes → fetch cross-site. Lax NÃO envia cookie em
+  // cross-site fetch, então /refresh chegava sem zf_refresh e o user
+  // era deslogado a cada F5. None+Secure resolve (browser exige Secure
+  // pra aceitar SameSite=None, o que já temos via NODE_ENV=production).
   return {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: isProd ? 'none' : 'lax',
+    secure: isProd,
     path: '/api/v1/account',
     maxAge: Math.floor(REFRESH_TTL_MS / 1000),
   };
