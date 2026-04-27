@@ -341,7 +341,10 @@ window.postMessage({
 - `middleware/requireAdmin.js` — preHandler que extende `authGuard`, re-checa `role=ADMIN` no banco (defesa em profundidade contra token stale)
 - `routes/admin.js` com prefixo `/api/v1/admin` (tudo gated por `[authGuard, requireAdmin]`):
   - **Leitura**: `GET /stats` (users/keys/subs counts, inGrace, MRR), `GET /users` (paginado + search), `GET /users/:id` (detalhe completo com keys+devices+subs+payments+validations+audit), `GET /keys` (lista global)
-  - **Ações**: `POST /keys/:id/reset-bind` (força, bypassa 1×/mês), `/unlock-reset` (zera counter), `/block` + `/unblock`, `POST /subscriptions/:id/extend` + `/set-status`, `POST /users/:id/promote`
+  - **Ações em chaves**: `POST /keys/:id/reset-bind` (força, bypassa 1×/mês), `/unlock-reset` (zera counter), `/block` + `/unblock`
+  - **Ações em subscriptions**: `POST /subscriptions/:id/extend` + `/set-status` + `/change-plan` (promover/rebaixar — Sprint 5 ETAPA A)
+  - **Ações em users**: `POST /users/:id/promote` (muda role) + `/set-password` (admin define senha) + `/grant-key` (cria sub+chave nova) + `/send-magic-link` (gera+envia novo link)
+  - **Cortesia completa**: `POST /admin/grant-access` — cria/anexa user + sub manual + chave + opcional magic link. UI versão do `scripts/grant-access.js`
   - Todas registram audit_logs com `userId` do admin + metadata completo (valores antes/depois)
 - Seed atualizado: admin recebe `passwordSetAt` + `emailVerified` na criação, evita `PASSWORD_NOT_SET` no login direto
 
@@ -365,6 +368,46 @@ window.postMessage({
 - **Send side**: `kirvanoService` (welcome email) e `account.js` (magic link) capturam o `id` retornado pela Resend e persistem em `EmailToken.resendEmailId` com `deliveryStatus='sent'`
 - **Webhook**: `POST /api/v1/webhooks/resend` com auth header `X-Zapfire-Resend-Token` (env `RESEND_WEBHOOK_TOKEN`). Mapeia eventos (`email.sent|delivered|bounced|complained|failed`) → deliveryStatus, ignora opened/clicked. Sempre 200 após auth (anti retry loop). Em bounce/complained/failed, cria audit log
 - **Admin UI**: página `/admin/emails` lista tudo com filtros, banner alerta quando tem bounces, link do destinatário navega pro user
+
+### Sprint 5 — COMPLETO (Funnel Tracking + Relatórios + Daily Report)
+
+Feature do plano **Pro** que rastreia leads que chegaram ao final de funis monitorados, com card no dashboard, tab "Relatórios" filtravel e entrega automática no próprio WhatsApp do usuário. 100% client-side (zero backend) — só `plan.features.tracking` e `plan.features.dailyReport` vêm do `/auth/validate`. Doc completa em [`docs/sprint5-tracking.md`](docs/sprint5-tracking.md).
+
+**Storage (ETAPA A):**
+- IndexedDB bumpado v1→v2 com store nova `funnel_runs` + 4 indexes (funnelId_startedAt, status_startedAt, leadJid, startedAt)
+- Schema do `funnels` ampliado com 4 campos opcionais (`trackingEnabled`, `trackingLabel`, `notifyOnComplete`, `dailyReportEnabled`). Itens antigos lerão com defaults via `withFunnelDefaults` — sem migration explícita
+- API: `addRun`, `getRun`, `updateRun`, `listRuns(filters)`, `deleteRun`, `deleteRunsOlderThan(ms)` (cursor pra retention 90d)
+
+**Engine + tracker (ETAPA A):**
+- `funnel-engine.js` ampliado com 4 hooks opcionais (`onRunStart`, `onStepComplete`, `onStepError`, `onRunFinish`) — invocados em try/catch, lógica de send/lock/cancel/delay intacta
+- `funnel-tracker.js` (NOVO) — wrapper `runFunnelWithTracking(funnel, target, opts)`. Se `!trackingEnabled`, passthrough direto pro `runFunnel` (zero ruído). Se tracking ativo, encadeia hooks pra escrever em `funnel_runs`
+- **Mutex por runId via `chainWrite`** — corrige race condition observada em prod onde múltiplos `onStepComplete` paralelos sobrescreviam o status='completed' do `onRunFinish`. Garante ordem: addRun → step1 → step2 → ... → finish
+- `reconcileOrphanRuns()` no startup do manager — recupera runs zumbis pre-fix (allStepsDone mas status='running') marcando como completed retroativamente; runs >24h sem terminar viram failed
+
+**Backend + gate por plano (ETAPA A):**
+- Seed atualizado: `monthly_v1`/`annual_v1`/`monthly_x1` recebem `FEATURES_FREE` (tracking: false). Plano novo `pro_v1` (R$97 placeholder) com `FEATURES_PRO` (tracking + dailyReport + maxMonitoredFunnels: 10)
+- `/auth/validate` já retornava `plan.features` (descoberto na exploração — não foi necessário mexer)
+- service-worker salva `data.data.plan?.features` em `chrome.storage.local.zf_plan_features` após cada validate. Manager observa via `chrome.storage.onChanged` e reage
+- Botão "Mudar plano" no SubCard do `/admin/usuarios/:id` (endpoint `POST /admin/subscriptions/:id/change-plan` + `ChangePlanDialog`) — pra promover/rebaixar testes sem precisar Prisma Studio. Audit log com snapshot de features antes/depois
+
+**Manager UI (ETAPA A + B):**
+- Editor de funil ganha seção colapsável "Monitoramento" (toggle + sub-checkboxes pra notify/daily + input "Nome no relatório"). Free user vê tudo desabilitado com badge "Pro"; click no toggle bloqueado abre `modal-upgrade-pro`
+- Indicador discreto de tracking ativo no card de funil (sidebar via `.card-track-badge` + manager via `.list-track-badge`) — SVG bar-chart na cor `--type-funnel`
+- Card "Funis Monitorados (Hoje)" no dashboard "Tudo" com 3 estados: Free preview, Pro sem tracking ativo (CTA), Pro com dados (lista funis + barras horizontais + total + "Ver relatório completo →")
+- Tab "Relatórios" nova entre "Funis" e "Mensagens" com filtros (Período: Hoje/7d/30d, Funil: Todos/lista) + lista agrupada por funil em `<details>` colapsáveis + botões "Abrir conversa" (foca tab WA + `WPP.chat.openChatBottom`) e "Enviar relatório agora pro meu WhatsApp"
+- Funis órfãos (deletados depois) preservados como grupo "(apagado)"
+
+**Daily report automático (ETAPA C):**
+- Modal "Configurar entrega automática" com 4 modos (`disabled`, `fixed` HH:MM, `immediate`, `every4h`) + checkbox list dos funis monitorados
+- Config salva em IndexedDB `meta('reports.delivery')` (canonical) + espelhada em `chrome.storage.local.zf_reports_delivery` (pro SW ler rápido)
+- service-worker: `setupDeliveryAlarm(config)` cria/limpa alarm `zf_daily_report` com `when: nextOccurrenceOf(HH:MM), periodInMinutes: 1440` (fixed) ou `periodInMinutes: 240` (every4h). `bootstrapDeliveryAlarm()` no `onStartup`/`onInstalled`/load do SW
+- `processScheduledDelivery()` quando alarm dispara: lê config + runs do IndexedDB direto via `storage.js` import, gera texto via `generateReportText`, despacha via `chrome.tabs.sendMessage` pra WA Web tab. Sem tab? salva `zf_pending_report` (content.js consome no init)
+- Modo `immediate` é hook no `funnel-tracker.onRunFinish` — quando completed E funil incluído na config, manda `window.parent.postMessage('ZF_SEND_REPORT_TO_SELF')` pro content.js (não usa alarm)
+- `lib/report-template.js` (NOVO) com `generateReportText`/`generateImmediateText`/`groupRunsByFunnel` compartilhados entre manager + SW + tracker
+- content.js helper `sendTextToSelf(text)` reusado por 3 entry points: `ZF_SEND_REPORT_FROM_MANAGER` (chrome.runtime), `ZF_DELIVER_REPORT_FROM_SW` (chrome.runtime), `ZF_SEND_REPORT_TO_SELF` (window message do tracker)
+- `processPendingReportIfAny()` chamado no fim do `init()` bem-sucedido — entrega relatórios que ficaram queued enquanto WA Web estava fechado
+
+**Retention 90d:** `deleteRunsOlderThan(now - 90 dias)` no startup do manager (background, não bloqueia init)
 
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
@@ -427,10 +470,25 @@ window.postMessage({
 - **Content do usuário nunca no servidor**: scripts/áudios/mídias ficam em IndexedDB local. Essa é decisão fundacional (Sprint 3) mas virou ponto de venda na Privacy Policy e no store listing — zero acesso a dados sensíveis do cliente
 - **Screenshots e promo tile 440x280 ainda pendentes** pra submissão CWS
 
+### Sprint 5 (tracking + relatórios)
+- **"Chegou ao final do funil" = todos os steps disparados COM SUCESSO pelo Zapfire**. Não rastreamos resposta/ack/leitura — quem viu o último step (na nossa visão) completou. Decisão fundacional pra evitar dependência de signals do WA que mudam frequentemente
+- **Tracking opt-in por funil via `trackingEnabled` toggle** — funis sem o flag fazem passthrough direto pelo `runFunnel` (zero IndexedDB write, zero overhead). Evita poluir o storage com runs não pedidos
+- **Mutex por runId no `funnel-tracker.js` (`chainWrite`)** — corrige race condition observada em prod onde `onStepComplete` async stale sobrescrevia `onRunFinish` (status='completed' virava 'running'). Garante ordem strict addRun→steps→finish. `reconcileOrphanRuns()` no startup recupera runs já zumbis
+- **`runFunnel` ampliado SEM mudar assinatura** — adicionados 4 hooks opcionais (`onRunStart`/`onStepComplete`/`onStepError`/`onRunFinish`) no objeto opts existente. Lógica de send/lock/cancel/delay 100% intacta
+- **Retention 90d hardcoded** — `deleteRunsOlderThan(now - 90d)` no startup do manager. Configurável via `meta` no futuro se virar pedido
+- **Daily report 100% client-side via `chrome.alarms`** — backend não sabe nada sobre runs. Alarm name único `zf_daily_report` (modo determina `when`/`periodInMinutes`), reagendado em `onStartup`/`onInstalled`/load do SW pra cobrir reload da extensão
+- **Modo `immediate` NÃO usa alarm** — é hook no `funnel-tracker.onRunFinish` que postMessages pro content.js. Mais rápido e mais natural (tracker já roda no contexto certo)
+- **Config canonical em IndexedDB `meta('reports.delivery')`, espelhada em `chrome.storage.local.zf_reports_delivery`** — manager escreve nos 2; SW lê do chrome.storage (rápido, sem precisar abrir IndexedDB toda hora). Read divergência é aceitável pq lastSentAt é não crítico
+- **Pending report**: SW salva `zf_pending_report` quando WA Web está fechado, content.js consome no `init()` pós-validação. Texto é pré-gerado — se user fica dias sem abrir, recebe relatório com timestamps antigos (aceitável)
+- **`generateReportText` compartilhado em `lib/report-template.js`** — manager + SW + tracker importam dali. Limita 10 leads/funil pra não estourar tamanho de mensagem WhatsApp
+- **Plano `pro_v1` preço placeholder R$97** — definir antes de criar oferta na Kirvano. Quando virar definitivo, atualizar seed + adicionar offer_id em `kirvanoParser.js` (PRO_OFFER_IDS)
+- **Heartbeat NÃO atualiza `plan.features`** — só `/auth/validate` faz. Promover Pro requer F5/relogin pra UI refletir. Aceitável pq é evento raro
+- **`maxMonitoredFunnels: 10` documentado mas não validado client-side** — fica pra quando alguém atingir o limite
+
 ## Próximos Sprints
 
-- **Sprint 5 (pulado pra frente — fazer quando necessário):** Gatilhos por palavra-chave. Hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado
-- **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`
+- **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`. Definir preço final do `pro_v1` + criar oferta na Kirvano + adicionar offer_id em `kirvanoParser.js` (PRO_OFFER_IDS)
+- **Gatilhos por palavra-chave (Sprint futuro):** hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado. Originalmente era "Sprint 5", virou "Sprint 5.5 ou outro" depois que Sprint 5 virou tracking
 
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
@@ -459,7 +517,9 @@ zapfire/
 │   ├── email-templates.md                ← 5 templates + estrutura + modo mock
 │   ├── deploy-railway.md                 ← guia 10 passos pro backend
 │   ├── deploy-vercel.md                  ← guia pro painel
-│   └── chrome-web-store-submission.md    ← textos prontos + checklist + justificativas de permissões
+│   ├── chrome-web-store-submission.md    ← textos prontos + checklist + justificativas de permissões
+│   ├── backup-format.md                  ← schema ZapVoice 3.0.0 + mapeamentos do import/export
+│   └── sprint5-tracking.md               ← Sprint 5 — tracking + relatórios + daily report
 │
 ├── backend/                              ← Node.js + Fastify + Prisma + PostgreSQL
 │   ├── .env                              ← gitignored (secrets)
@@ -470,9 +530,12 @@ zapfire/
 │   ├── package.json
 │   ├── prisma/
 │   │   ├── schema.prisma                 ← 10 tabelas + 3 enums novos do Sprint 4
-│   │   ├── seed.js                       ← plans monthly_x1, monthly_v1, annual_v1
+│   │   ├── seed.js                       ← plans monthly_x1, monthly_v1, annual_v1, pro_v1 (Sprint 5)
 │   │   └── migrations/
-│   │       └── 20260424_sprint4_auth_payments/
+│   │       ├── 20260424_sprint4_auth_payments/
+│   │       └── 20260427_sprint6_email_tracking/
+│   ├── scripts/
+│   │   └── grant-access.js               ← cortesia CLI (cria user+sub+chave+magic link)
 │   └── src/
 │       ├── server.js                     ← registra CORS c/ callback, @fastify/cookie, routes
 │       ├── lib/
@@ -539,9 +602,12 @@ zapfire/
     ├── main-world/
     │   └── injected.js                   ← MAIN world, ponte pra WPP + módulos nativos
     ├── lib/
-    │   ├── storage.js                    ← IndexedDB wrapper
+    │   ├── storage.js                    ← IndexedDB wrapper (4 stores na v2)
     │   ├── sender.js                     ← envio via DOM (fallback)
-    │   ├── funnel-engine.js              ← executor de funis paralelos
+    │   ├── funnel-engine.js              ← executor de funis paralelos (+4 hooks Sprint 5)
+    │   ├── funnel-tracker.js             ← Sprint 5 — wrapper c/ mutex + reconcile + immediate
+    │   ├── report-template.js            ← Sprint 5 — generateReportText + groupRunsByFunnel
+    │   ├── backup.js                     ← export/import compatível com ZapVoice 3.0.0
     │   └── grace-banner.js               ← Sprint 4 — banner de grace + gate de envio
     ├── sidebar/                          ← iframe (320px fixed à direita)
     ├── quickbar/                         ← iframe dentro do <footer> do WA
