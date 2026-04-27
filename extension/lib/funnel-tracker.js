@@ -17,7 +17,106 @@
 // ============================================================
 
 import { runFunnel } from './funnel-engine.js';
-import { addRun, updateRun, getRun } from './storage.js';
+import { addRun, updateRun, getRun, listRuns } from './storage.js';
+
+// ------------------------------------------------------------
+// Mutex por runId — serializa reads-modify-writes no IndexedDB
+// ------------------------------------------------------------
+// O engine chama os hooks via safeHook (sync, sem await). Como os
+// nossos handlers são async (fazem getRun + updateRun), eles rodam
+// CONCORRENTES — múltiplos onStepComplete + onRunFinish disparados
+// quase juntos hit "await getRun" intercalado, geram snapshots stale,
+// e a última escrita sobrescreve as outras. Resultado observado em
+// prod: run com completedSteps=totalSteps mas status ainda 'running'
+// e finishedAt null porque onStepComplete chegou DEPOIS do
+// onRunFinish e clobberou.
+//
+// Solução: cada operação de write entra numa Promise chain por runId.
+// Próxima espera a anterior terminar antes de começar. Garante ordem
+// strict: addRun → step1 → step2 → ... → finish, sem race.
+// ------------------------------------------------------------
+const runWriteChains = new Map();
+
+function chainWrite(runId, task) {
+  const prev = runWriteChains.get(runId) || Promise.resolve();
+  const next = prev.then(task, task); // continua mesmo se anterior rejeitou
+  // Catch interno pra não vazar unhandled rejection no link da chain.
+  // O caller ainda recebe o `next` original, então pode tratar erros.
+  runWriteChains.set(runId, next.catch(() => {}));
+  return next;
+}
+
+function clearChain(runId) {
+  runWriteChains.delete(runId);
+}
+
+// ------------------------------------------------------------
+// Reconciliação de runs órfãos (Sprint 5 — chamada no startup)
+// ------------------------------------------------------------
+// Corrige 2 cenários de runs ficarem presos em 'running':
+//
+// 1. Tab fechada no meio: engine não terminou de chamar onRunFinish.
+//    Detecta por startedAt > 24h. Marca 'failed' com finishedAt=now.
+//
+// 2. Race condition antiga (pre-fix do mutex): completedSteps já
+//    bate com totalSteps E todos os steps[] têm success=true MAS
+//    status ficou 'running' porque um onStepComplete stale
+//    sobrescreveu o onRunFinish. Marca 'completed' usando o último
+//    steps[].sentAt como finishedAt (mais preciso que now).
+//
+// Idempotente — re-roda quantas vezes quiser sem efeito colateral.
+// Retorna { fixed, failed } com contagens pra logar.
+// ------------------------------------------------------------
+const ZOMBIE_RUN_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24h
+
+export async function reconcileOrphanRuns() {
+  const orphans = await listRuns({ status: 'running' });
+  let fixed = 0;
+  let failed = 0;
+  const now = Date.now();
+
+  for (const run of orphans) {
+    const allStepsDone =
+      typeof run.totalSteps === 'number' &&
+      typeof run.completedSteps === 'number' &&
+      run.totalSteps > 0 &&
+      run.completedSteps >= run.totalSteps;
+
+    if (allStepsDone) {
+      // Caso 2: run terminou mas status não atualizou — recupera
+      const lastSentAt = (run.steps || [])
+        .map((s) => s.sentAt || 0)
+        .reduce((max, t) => (t > max ? t : max), run.startedAt || now);
+      try {
+        await updateRun(run.id, {
+          finishedAt: lastSentAt || now,
+          status: 'completed',
+        });
+        fixed++;
+      } catch (err) {
+        console.warn('[funnel-tracker] reconcile (completed) falhou:', err);
+      }
+      continue;
+    }
+
+    if (run.startedAt && now - run.startedAt > ZOMBIE_RUN_THRESHOLD_MS) {
+      // Caso 1: zumbi (>24h sem terminar). Marca como falhou.
+      try {
+        await updateRun(run.id, {
+          finishedAt: now,
+          status: 'failed',
+        });
+        failed++;
+      } catch (err) {
+        console.warn('[funnel-tracker] reconcile (zombie) falhou:', err);
+      }
+    }
+    // Senão: run < 24h ainda pode estar legitimamente rodando
+    // (ex: funil com delay grande entre steps). Deixa quieto.
+  }
+
+  return { fixed, failed };
+}
 
 // ------------------------------------------------------------
 // API pública
@@ -65,32 +164,33 @@ export function runFunnelWithTracking(funnel, target, opts = {}) {
     onRunStart: async (meta) => {
       // meta = { runId, funnelId, totalSteps }
       storageRunId = meta.runId;
-      try {
-        await addRun({
-          id: meta.runId,
-          funnelId: funnel.id,
-          funnelName: funnel.name,
-          leadJid: target.jid,
-          leadName: target.name || null,
-          startedAt: Date.now(),
-          totalSteps: meta.totalSteps,
-          completedSteps: 0,
-          status: 'running',
-          steps: [],
-        });
-      } catch (err) {
-        // Não bloqueia o run — só loga
-        console.warn('[funnel-tracker] addRun falhou:', err);
-      }
-      // Repassa pro caller (se passou)
+      await chainWrite(meta.runId, async () => {
+        try {
+          await addRun({
+            id: meta.runId,
+            funnelId: funnel.id,
+            funnelName: funnel.name,
+            leadJid: target.jid,
+            leadName: target.name || null,
+            startedAt: Date.now(),
+            totalSteps: meta.totalSteps,
+            completedSteps: 0,
+            status: 'running',
+            steps: [],
+          });
+        } catch (err) {
+          console.warn('[funnel-tracker] addRun falhou:', err);
+        }
+      });
       if (typeof userOnRunStart === 'function') userOnRunStart(meta);
     },
 
     onStepComplete: async (meta) => {
       // meta = { runId, stepIndex, totalSteps, item, sentAt }
-      try {
-        const current = await getRun(meta.runId);
-        if (current) {
+      await chainWrite(meta.runId, async () => {
+        try {
+          const current = await getRun(meta.runId);
+          if (!current) return;
           await updateRun(meta.runId, {
             completedSteps: (current.completedSteps || 0) + 1,
             steps: [
@@ -103,18 +203,19 @@ export function runFunnelWithTracking(funnel, target, opts = {}) {
               },
             ],
           });
+        } catch (err) {
+          console.warn('[funnel-tracker] updateRun (complete) falhou:', err);
         }
-      } catch (err) {
-        console.warn('[funnel-tracker] updateRun (complete) falhou:', err);
-      }
+      });
       if (typeof userOnStepComplete === 'function') userOnStepComplete(meta);
     },
 
     onStepError: async (meta) => {
       // meta = { runId, stepIndex, totalSteps, item?, error, sentAt }
-      try {
-        const current = await getRun(meta.runId);
-        if (current) {
+      await chainWrite(meta.runId, async () => {
+        try {
+          const current = await getRun(meta.runId);
+          if (!current) return;
           await updateRun(meta.runId, {
             steps: [
               ...(current.steps || []),
@@ -127,24 +228,31 @@ export function runFunnelWithTracking(funnel, target, opts = {}) {
               },
             ],
           });
+        } catch (err) {
+          console.warn('[funnel-tracker] updateRun (error) falhou:', err);
         }
-      } catch (err) {
-        console.warn('[funnel-tracker] updateRun (error) falhou:', err);
-      }
+      });
       if (typeof userOnStepError === 'function') userOnStepError(meta);
     },
 
     onRunFinish: async (meta) => {
       // meta = { runId, status, completed, total, finishedAt }
-      try {
-        await updateRun(meta.runId, {
-          finishedAt: meta.finishedAt,
-          completedSteps: meta.completed,
-          status: meta.status,  // 'completed' | 'cancelled' | 'failed'
-        });
-      } catch (err) {
-        console.warn('[funnel-tracker] updateRun (finish) falhou:', err);
-      }
+      // chainWrite garante que esse update roda DEPOIS de todos os
+      // step writes pendentes — caso contrário o status='completed'
+      // seria sobrescrito por um step handler stale escrevendo depois.
+      await chainWrite(meta.runId, async () => {
+        try {
+          await updateRun(meta.runId, {
+            finishedAt: meta.finishedAt,
+            completedSteps: meta.completed,
+            status: meta.status,  // 'completed' | 'cancelled' | 'failed'
+          });
+        } catch (err) {
+          console.warn('[funnel-tracker] updateRun (finish) falhou:', err);
+        }
+      });
+      // Limpa o slot do mapa pra não vazar memória ao longo do tempo
+      clearChain(meta.runId);
       if (typeof userOnRunFinish === 'function') userOnRunFinish(meta);
     },
   };

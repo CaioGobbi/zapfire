@@ -12,6 +12,7 @@
 
 import * as storage from '../lib/storage.js';
 import * as backup from '../lib/backup.js';
+import { reconcileOrphanRuns } from '../lib/funnel-tracker.js';
 import { PANEL_URL } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1849,6 +1850,19 @@ function init() {
   setupTrackingWiring();
   // Carrega plan.features do chrome.storage e observa mudanças
   loadPlanFeatures();
+
+  // Sprint 5 — Reconciliação de runs órfãos. Conserta runs que ficaram
+  // presos em 'running' por race condition (pre-fix) ou por aba fechada
+  // no meio. Roda ANTES da retention pra que runs reconciliados como
+  // 'completed' não sejam confundidos com lixo.
+  reconcileOrphanRuns().then(({ fixed, failed }) => {
+    if (fixed > 0) console.log(`[Zapfire][manager] reconcile: ${fixed} run(s) marcado(s) completed retroativamente`);
+    if (failed > 0) console.log(`[Zapfire][manager] reconcile: ${failed} run(s) zumbi marcado(s) failed (>24h sem terminar)`);
+    // Refresca a UI se a tab Reports / dashboard estão abertas
+    if (fixed > 0 || failed > 0) renderList();
+  }).catch((err) => {
+    console.warn('[Zapfire][manager] reconcile falhou:', err);
+  });
 
   // Sprint 5 — Retention policy: apaga runs com finishedAt < 90d.
   // Roda em background, não bloqueia o init. 90d é hardcoded por agora —
