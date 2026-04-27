@@ -397,6 +397,19 @@ input, textarea { font-family: inherit; font-size: inherit; }
   flex-shrink: 0;
 }
 
+/* Sprint 5 — indicador de tracking ativo no list-row de funil */
+.list-track-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--type-funnel-bg);
+  color: var(--type-funnel);
+}
+
 .card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -1089,4 +1102,127 @@ dialog::backdrop {
 .bk-report-pill--error {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* ====== Sprint 5 — Seção de monitoramento no editor de funil ====== */
+.tracking-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.tracking-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+.tracking-header:hover { background: var(--bg-hover); }
+.tracking-chevron {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.tracking-header[aria-expanded="true"] .tracking-chevron {
+  transform: rotate(90deg);
+}
+.tracking-title { flex: 1; }
+.tracking-pro-badge {
+  display: inline-flex;
+  align-items: center;
+  background: var(--type-funnel-bg);
+  color: var(--type-funnel);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--type-funnel);
+}
+
+.tracking-body {
+  padding: 8px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tracking-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.tracking-row:hover { background: var(--bg-hover); border-color: var(--border-hover); }
+.tracking-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tracking-row span { display: flex; flex-direction: column; gap: 2px; }
+.tracking-row strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.tracking-row small {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.tracking-row.tracking-row--sub { margin-left: 12px; }
+
+/* Quando o user é Free, todo o group fica grayed-out + desabilitado */
+.tracking-row.tracking-row--locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tracking-row.tracking-row--locked input { pointer-events: none; }
+
+.tracking-pro-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+.tracking-pro-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 4px 4px 0;
+}
+
+.tracking-label-field {
+  margin-top: 4px;
+}
+.tracking-label-field input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.tracking-label-field input:focus { border-color: var(--accent); }
+.tracking-label-field input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

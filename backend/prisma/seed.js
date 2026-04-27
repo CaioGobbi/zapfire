@@ -16,9 +16,30 @@ async function main() {
   // ---------- 1. Planos ----------
   // Mantém o monthly_x1 legado (usado pela chave de teste já em uso)
   // e adiciona os planos comerciais do Sprint 4: Mensal (R$47) e Anual (R$395)
+  // Sprint 5 — features.tracking + features.dailyReport definem se o
+  // plano libera o painel de Funis Monitorados + Relatórios. monthly_v1
+  // e annual_v1 são "Free" pra essas features (false). pro_v1 é o plano
+  // novo com tracking ligado.
+  const FEATURES_FREE = {
+    audioInjection: true,
+    funnels: true,
+    triggers: true,
+    scheduling: true,
+    multiDevice: true,
+    tracking: false,         // Sprint 5
+    dailyReport: false,      // Sprint 5
+    maxMonitoredFunnels: 0,  // Sprint 5
+  };
+  const FEATURES_PRO = {
+    ...FEATURES_FREE,
+    tracking: true,
+    dailyReport: true,
+    maxMonitoredFunnels: 10,
+  };
+
   const planLegacy = await prisma.plan.upsert({
     where: { code: 'monthly_x1' },
-    update: {},
+    update: { features: FEATURES_FREE },
     create: {
       code: 'monthly_x1',
       name: 'Mensal X1',
@@ -27,13 +48,7 @@ async function main() {
       billingCycle: 'MONTHLY',
       maxKeys: 1,
       maxDevicesPerKey: 4,
-      features: {
-        audioInjection: true,
-        funnels: true,
-        triggers: true,
-        scheduling: true,
-        multiDevice: true,
-      },
+      features: FEATURES_FREE,
     },
   });
   console.log('✅ Plano legado:', planLegacy.code);
@@ -45,6 +60,7 @@ async function main() {
       priceCents: 4700,
       billingCycle: 'MONTHLY',
       maxDevicesPerKey: 4,
+      features: FEATURES_FREE,
     },
     create: {
       code: 'monthly_v1',
@@ -54,13 +70,7 @@ async function main() {
       billingCycle: 'MONTHLY',
       maxKeys: 1,
       maxDevicesPerKey: 4,
-      features: {
-        audioInjection: true,
-        funnels: true,
-        triggers: true,
-        scheduling: true,
-        multiDevice: true,
-      },
+      features: FEATURES_FREE,
     },
   });
   console.log('✅ Plano mensal:', planMonthly.code, '— R$', (planMonthly.priceCents / 100).toFixed(2));
@@ -72,6 +82,7 @@ async function main() {
       priceCents: 39500,
       billingCycle: 'ANNUAL',
       maxDevicesPerKey: 4,
+      features: FEATURES_FREE,
     },
     create: {
       code: 'annual_v1',
@@ -81,16 +92,34 @@ async function main() {
       billingCycle: 'ANNUAL',
       maxKeys: 1,
       maxDevicesPerKey: 4,
-      features: {
-        audioInjection: true,
-        funnels: true,
-        triggers: true,
-        scheduling: true,
-        multiDevice: true,
-      },
+      features: FEATURES_FREE,
     },
   });
   console.log('✅ Plano anual: ', planAnnual.code, '— R$', (planAnnual.priceCents / 100).toFixed(2));
+
+  // Sprint 5 — Plano Pro (tracking + relatórios). Preço placeholder R$97
+  // até decisão final. Quando virar definitivo, atualizar aqui + criar
+  // a oferta correspondente na Kirvano + adicionar offer_id em
+  // backend/src/lib/kirvanoParser.js (PRO_OFFER_IDS).
+  const planPro = await prisma.plan.upsert({
+    where: { code: 'pro_v1' },
+    update: {
+      name: 'Pro',
+      priceCents: 9700,  // PLACEHOLDER — definir preço final
+      features: FEATURES_PRO,
+    },
+    create: {
+      code: 'pro_v1',
+      name: 'Pro',
+      description: 'Zapfire Pro — Funis monitorados + relatórios automáticos no WhatsApp',
+      priceCents: 9700, // PLACEHOLDER — R$97/mês até decisão final
+      billingCycle: 'MONTHLY',
+      maxKeys: 1,
+      maxDevicesPerKey: 4,
+      features: FEATURES_PRO,
+    },
+  });
+  console.log('✅ Plano Pro:   ', planPro.code, '— R$', (planPro.priceCents / 100).toFixed(2), '(preço placeholder)');
 
   // Alias: chave de teste antiga continua apontando pro plano legado
   const plan = planLegacy;

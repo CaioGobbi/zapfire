@@ -17,11 +17,14 @@
 // ============================================================
 
 const DB_NAME = 'zapfire_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORE_ITEMS = 'items';
 const STORE_FUNNELS = 'funnels';
 const STORE_META = 'meta';
+// Sprint 5 — runs de funis monitorados (trackingEnabled). Cada execução
+// gera 1 entry; quem não tem tracking não cria nada (zero ruído).
+const STORE_FUNNEL_RUNS = 'funnel_runs';
 
 // Cache da conexão — IndexedDB é caro pra abrir, mantém vivo
 let dbPromise = null;
@@ -50,7 +53,22 @@ function openDB() {
         db.createObjectStore(STORE_META, { keyPath: 'key' });
       }
 
-      // Próximas versões viriam aqui (oldVersion < 2 etc)
+      // ----- v2 (Sprint 5): adiciona store de runs de tracking -----
+      // Não toca nas stores existentes. Migration de items/funnels é
+      // tratada via withItemDefaults / withFunnelDefaults na leitura.
+      if (oldVersion < 2) {
+        const runs = db.createObjectStore(STORE_FUNNEL_RUNS, { keyPath: 'id' });
+        // [funnelId, startedAt] — relatório por funil ordenado por tempo
+        runs.createIndex('funnelId_startedAt', ['funnelId', 'startedAt'], { unique: false });
+        // [status, startedAt] — runs ativos vs concluídos com ordenação
+        runs.createIndex('status_startedAt', ['status', 'startedAt'], { unique: false });
+        // leadJid — futuro: query "qual histórico de funis pra esse lead"
+        runs.createIndex('leadJid', 'leadJid', { unique: false });
+        // startedAt simples — usado pra retention policy (deleteRunsOlderThan)
+        runs.createIndex('startedAt', 'startedAt', { unique: false });
+      }
+
+      // Próximas versões viriam aqui (oldVersion < 3 etc)
     };
 
     req.onsuccess = () => {
@@ -359,7 +377,50 @@ export async function deleteItem(id) {
 //   steps: [{ itemId: string, delayMs: number }, ...],
 //   createdAt: number,
 //   updatedAt: number,
+//
+//   // ----- Sprint 5 — tracking opt-in (todos opcionais, default false/null) -----
+//   trackingEnabled?:    boolean   // ativa criação de funnel_runs
+//   trackingLabel?:      string    // nome customizado pro relatório
+//   notifyOnComplete?:   boolean   // toast em tempo real (Pro)
+//   dailyReportEnabled?: boolean   // entra no daily report do WhatsApp (Pro)
+//   isFavorite?:         boolean   // import/export ZapVoice
 // }
+
+// Defaults dos campos novos. Aplicados em withFunnelDefaults na leitura.
+function defaultsForFunnel() {
+  return {
+    trackingEnabled: false,
+    trackingLabel: null,
+    notifyOnComplete: false,
+    dailyReportEnabled: false,
+    isFavorite: false,
+  };
+}
+
+// Normaliza funil lido do banco aplicando defaults. Não muda o que já
+// existe — só preenche o que está undefined. Itens antigos continuam
+// funcionando sem migration.
+export function withFunnelDefaults(funnel) {
+  if (!funnel) return funnel;
+  const defs = defaultsForFunnel();
+  const out = { ...funnel };
+  for (const k of Object.keys(defs)) {
+    if (out[k] === undefined) out[k] = defs[k];
+  }
+  return out;
+}
+
+// Pega só os campos novos de um input, aplicando defaults se ausentes.
+// Mantém valores explícitos (incluindo `false`).
+function extractFunnelExtendedFields(input) {
+  const defs = defaultsForFunnel();
+  const out = {};
+  for (const k of Object.keys(defs)) {
+    const v = input[k];
+    out[k] = v === undefined || v === null ? defs[k] : v;
+  }
+  return out;
+}
 
 function validateFunnelInput(funnel) {
   if (!funnel || typeof funnel !== 'object') {
@@ -393,6 +454,7 @@ export async function addFunnel(input) {
     })),
     createdAt: input.createdAt || now(),
     updatedAt: now(),
+    ...extractFunnelExtendedFields(input),
   };
 
   await tx(STORE_FUNNELS, 'readwrite', (store) => store.add(funnel));
@@ -401,11 +463,13 @@ export async function addFunnel(input) {
 
 export async function getFunnel(id) {
   if (!id) return null;
-  return tx(STORE_FUNNELS, 'readonly', (store) => store.get(id));
+  const raw = await tx(STORE_FUNNELS, 'readonly', (store) => store.get(id));
+  return raw ? withFunnelDefaults(raw) : raw;
 }
 
 export async function listFunnels() {
-  const all = await tx(STORE_FUNNELS, 'readonly', (store) => store.getAll());
+  const raw = await tx(STORE_FUNNELS, 'readonly', (store) => store.getAll());
+  const all = raw.map(withFunnelDefaults);
   all.sort((a, b) => b.createdAt - a.createdAt);
   return all;
 }
@@ -449,6 +513,7 @@ export async function putFunnel(input) {
     })),
     createdAt: input.createdAt || now(),
     updatedAt: now(),
+    ...extractFunnelExtendedFields(input),
   };
   await tx(STORE_FUNNELS, 'readwrite', (store) => store.put(funnel));
   return funnel;
@@ -460,17 +525,181 @@ export async function deleteFunnel(id) {
   return true;
 }
 
-// Apaga TUDO — items + funis. Meta preservado (preferências da UI).
+// Apaga TUDO — items + funis + runs de tracking. Meta preservado
+// (preferências da UI, configuração de daily report).
 export async function clearAll() {
-  const [itemsCount, funnelsCount] = await Promise.all([
+  const [itemsCount, funnelsCount, runsCount] = await Promise.all([
     tx(STORE_ITEMS, 'readonly', (store) => store.count()),
     tx(STORE_FUNNELS, 'readonly', (store) => store.count()),
+    tx(STORE_FUNNEL_RUNS, 'readonly', (store) => store.count()),
   ]);
   await Promise.all([
     tx(STORE_ITEMS, 'readwrite', (store) => store.clear()),
     tx(STORE_FUNNELS, 'readwrite', (store) => store.clear()),
+    tx(STORE_FUNNEL_RUNS, 'readwrite', (store) => store.clear()),
   ]);
-  return { clearedItems: itemsCount, clearedFunnels: funnelsCount };
+  return { clearedItems: itemsCount, clearedFunnels: funnelsCount, clearedRuns: runsCount };
+}
+
+// ============================================================
+// FUNNEL_RUNS — execuções de funis monitorados (Sprint 5)
+// ============================================================
+//
+// Schema:
+// {
+//   id:             string (uuid),
+//   funnelId:       string,
+//   funnelName:     string,           // snapshot p/ caso o funil seja
+//                                     // renomeado/deletado depois
+//   leadJid:        string,           // ex: "5541999999999@c.us"
+//   leadName:       string | null,
+//
+//   startedAt:      number (ms),
+//   finishedAt:     number | null,
+//
+//   totalSteps:     number,           // tamanho do funil quando rodou
+//   completedSteps: number,           // quantos disparados com sucesso
+//
+//   status: 'running' | 'completed' | 'cancelled' | 'failed',
+//
+//   steps: [
+//     { stepId, type, sentAt, success, error? }
+//   ]
+// }
+//
+// Indexes (criados na v2 do DB):
+//   - funnelId_startedAt: pra "runs do funil X ordenados por tempo"
+//   - status_startedAt:   pra "runs ativos / concluídos com filtro temporal"
+//   - leadJid:            pra "histórico do lead Y"
+//   - startedAt:          pra retention policy (deleteRunsOlderThan)
+// ============================================================
+
+const VALID_RUN_STATUS = new Set(['running', 'completed', 'cancelled', 'failed']);
+
+function validateRunInput(run) {
+  if (!run || typeof run !== 'object') {
+    throw new Error('Run precisa ser um objeto');
+  }
+  if (typeof run.funnelId !== 'string' || !run.funnelId) {
+    throw new Error('Run precisa de funnelId');
+  }
+  if (typeof run.leadJid !== 'string' || !run.leadJid) {
+    throw new Error('Run precisa de leadJid');
+  }
+  if (run.status && !VALID_RUN_STATUS.has(run.status)) {
+    throw new Error(`Status de run inválido: ${run.status}`);
+  }
+}
+
+export async function addRun(input) {
+  validateRunInput(input);
+  const run = {
+    id: input.id || uuid(),
+    funnelId: input.funnelId,
+    funnelName: input.funnelName || '',
+    leadJid: input.leadJid,
+    leadName: input.leadName || null,
+    startedAt: input.startedAt || now(),
+    finishedAt: input.finishedAt || null,
+    totalSteps: input.totalSteps || 0,
+    completedSteps: input.completedSteps || 0,
+    status: input.status || 'running',
+    steps: Array.isArray(input.steps) ? input.steps : [],
+  };
+  await tx(STORE_FUNNEL_RUNS, 'readwrite', (store) => store.add(run));
+  return run;
+}
+
+export async function getRun(id) {
+  if (!id) return null;
+  return tx(STORE_FUNNEL_RUNS, 'readonly', (store) => store.get(id));
+}
+
+// Patch parcial — faz merge com o existente. Se passar `steps`, SUBSTITUI
+// o array (não concatena). Pra append de step, leia o run atual antes.
+export async function updateRun(id, patch) {
+  if (!id) throw new Error('updateRun precisa de id');
+  const current = await getRun(id);
+  if (!current) throw new Error(`Run não encontrado: ${id}`);
+  const merged = {
+    ...current,
+    ...patch,
+    id: current.id,             // protege id
+    funnelId: current.funnelId, // não permite re-anchor
+    startedAt: current.startedAt,
+  };
+  if (patch.status && !VALID_RUN_STATUS.has(patch.status)) {
+    throw new Error(`Status de run inválido: ${patch.status}`);
+  }
+  await tx(STORE_FUNNEL_RUNS, 'readwrite', (store) => store.put(merged));
+  return merged;
+}
+
+// Filtros suportados:
+//   funnelId: string         — só runs daquele funil
+//   status:   string         — só de um status
+//   since:    number (ms)    — startedAt >= since
+//   until:    number (ms)    — startedAt <= until
+//   limit:    number         — corta após N (default sem limite)
+//
+// Resultado vem ordenado por startedAt DESC (mais recente primeiro).
+export async function listRuns(filters = {}) {
+  const all = await tx(STORE_FUNNEL_RUNS, 'readonly', (store) => store.getAll());
+
+  let results = all;
+  if (filters.funnelId) {
+    results = results.filter((r) => r.funnelId === filters.funnelId);
+  }
+  if (filters.status) {
+    results = results.filter((r) => r.status === filters.status);
+  }
+  if (typeof filters.since === 'number') {
+    results = results.filter((r) => r.startedAt >= filters.since);
+  }
+  if (typeof filters.until === 'number') {
+    results = results.filter((r) => r.startedAt <= filters.until);
+  }
+
+  results.sort((a, b) => b.startedAt - a.startedAt);
+
+  if (typeof filters.limit === 'number' && filters.limit > 0) {
+    results = results.slice(0, filters.limit);
+  }
+  return results;
+}
+
+export async function deleteRun(id) {
+  if (!id) return false;
+  await tx(STORE_FUNNEL_RUNS, 'readwrite', (store) => store.delete(id));
+  return true;
+}
+
+// Retention policy — apaga runs com startedAt < olderThanMs.
+// Usar `Date.now() - 90 * 86400000` pra retenção de 90 dias.
+// Retorna quantos foram apagados.
+export async function deleteRunsOlderThan(olderThanMs) {
+  if (typeof olderThanMs !== 'number') return 0;
+  return openDB().then((db) =>
+    new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_FUNNEL_RUNS, 'readwrite');
+      const store = transaction.objectStore(STORE_FUNNEL_RUNS);
+      const idx = store.index('startedAt');
+      const range = IDBKeyRange.upperBound(olderThanMs, true); // exclusivo
+      const cursorReq = idx.openCursor(range);
+      let count = 0;
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (cursor) {
+          cursor.delete();
+          count++;
+          cursor.continue();
+        }
+      };
+      cursorReq.onerror = () => reject(cursorReq.error);
+      transaction.oncomplete = () => resolve(count);
+      transaction.onerror = () => reject(transaction.error);
+    })
+  );
 }
 
 // ============================================================

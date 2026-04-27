@@ -32,6 +32,9 @@ const state = {
   // Modal de backup
   backupFile: null,        // File atualmente selecionado pra import
   backupPreview: null,     // Resultado de previewBackup() pro file atual
+  // Sprint 5 — features do plano (espelho do zf_plan_features no chrome.storage)
+  // Default {} = Free (todos os checks `!!features.tracking` viram false).
+  planFeatures: {},
 };
 
 // Quais types do storage cada filtro mostra
@@ -359,9 +362,14 @@ function funnelRow(funnel) {
   const row = document.createElement('div');
   row.className = 'list-row list-row--funnel';
   row.onclick = () => openFunnelModal(funnel);
+  // Sprint 5 — ícone de tracking depois do nome (mesmo SVG da sidebar)
+  const trackingIcon = funnel.trackingEnabled
+    ? `<span class="list-track-badge" title="Funil monitorado"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span>`
+    : '';
   row.innerHTML = `
     <span class="list-badge list-badge--funnel">FUNIL</span>
     <span class="list-name">${escapeHTML(funnel.name || '(sem nome)')}</span>
+    ${trackingIcon}
     <span class="list-meta">${funnel.steps.length} step(s)</span>
   `;
   return row;
@@ -634,7 +642,16 @@ async function openFunnelModal(funnel) {
   const isEdit = !!(funnel && funnel.id);
   state.draftFunnel = isEdit
     ? { ...funnel, steps: funnel.steps.map((s) => ({ ...s })) }
-    : { name: '', steps: [] };
+    : {
+        name: '',
+        steps: [],
+        // Sprint 5 — defaults dos campos de tracking pra novo funil.
+        // Itens existentes já vêm com os defaults aplicados via withFunnelDefaults.
+        trackingEnabled: false,
+        trackingLabel: null,
+        notifyOnComplete: false,
+        dailyReportEnabled: false,
+      };
 
   $('modal-funnel-title').textContent = isEdit ? 'Editar funil' : 'Novo funil';
   $('funnel-name').value = state.draftFunnel.name;
@@ -644,8 +661,48 @@ async function openFunnelModal(funnel) {
   state.poolItems = await storage.listItems();
   renderFunnelSteps();
 
+  // Sprint 5 — popula a seção de monitoramento conforme plano + estado salvo
+  renderTrackingSection();
+
   $('modal-funnel').showModal();
   $('funnel-name').focus();
+}
+
+// Sprint 5 — Render da seção "Monitoramento" no editor de funil.
+// Lê state.draftFunnel + state.planFeatures e atualiza UI.
+function renderTrackingSection() {
+  const draft = state.draftFunnel;
+  if (!draft) return;
+  const isPro = !!state.planFeatures.tracking;
+
+  // Reset visibilidade do colapsado
+  $('tracking-toggle').setAttribute('aria-expanded', 'false');
+  $('tracking-body').hidden = true;
+
+  // Badge "Pro" no header só aparece pra Free
+  $('tracking-pro-badge').hidden = isPro;
+
+  // Toggle principal
+  const trackingEnabled = $('tracking-enabled');
+  trackingEnabled.checked = !!draft.trackingEnabled;
+  trackingEnabled.disabled = !isPro;
+  trackingEnabled.parentElement.classList.toggle('tracking-row--locked', !isPro);
+
+  // Sub-checkboxes (notify + daily)
+  const notify = $('tracking-notify');
+  notify.checked = !!draft.notifyOnComplete;
+  notify.disabled = !isPro || !draft.trackingEnabled;
+  notify.parentElement.classList.toggle('tracking-row--locked', !isPro);
+
+  const daily = $('tracking-daily');
+  daily.checked = !!draft.dailyReportEnabled;
+  daily.disabled = !isPro || !draft.trackingEnabled;
+  daily.parentElement.classList.toggle('tracking-row--locked', !isPro);
+
+  // Label customizado
+  const label = $('tracking-label');
+  label.value = draft.trackingLabel || '';
+  label.disabled = !isPro || !draft.trackingEnabled;
 }
 
 function renderFunnelSteps() {
@@ -918,6 +975,24 @@ async function saveFunnelFromModal(event) {
   if (!draft.steps.length) { toast('Adicione pelo menos um step', 'warning'); return; }
 
   draft.name = name;
+
+  // Sprint 5 — campos de tracking. Só os respeita se o user é Pro;
+  // Free user não consegue marcar (UI bloqueia), mas defesa em
+  // profundidade aqui evita estado inconsistente caso o storage
+  // já tenha algo persistido de uma promoção anterior + downgrade.
+  const isPro = !!state.planFeatures.tracking;
+  if (isPro) {
+    draft.trackingEnabled = $('tracking-enabled').checked;
+    draft.notifyOnComplete = draft.trackingEnabled && $('tracking-notify').checked;
+    draft.dailyReportEnabled = draft.trackingEnabled && $('tracking-daily').checked;
+    const labelVal = $('tracking-label').value.trim();
+    draft.trackingLabel = labelVal || null;
+  } else {
+    // Free: força tudo desligado pra não criar runs órfãos
+    draft.trackingEnabled = false;
+    draft.notifyOnComplete = false;
+    draft.dailyReportEnabled = false;
+  }
 
   try {
     if (draft.id) {
@@ -1346,7 +1421,71 @@ function init() {
   handleHashFocus();
   window.addEventListener('hashchange', handleHashFocus);
 
+  // Sprint 5 — Wiring da seção de monitoramento
+  setupTrackingWiring();
+  // Carrega plan.features do chrome.storage e observa mudanças
+  loadPlanFeatures();
+
   renderList();
+}
+
+// Sprint 5 — listeners do colapsável + gate Pro + sync de sub-checkboxes
+function setupTrackingWiring() {
+  // Colapsável
+  $('tracking-toggle').addEventListener('click', () => {
+    const expanded = $('tracking-toggle').getAttribute('aria-expanded') === 'true';
+    $('tracking-toggle').setAttribute('aria-expanded', !expanded);
+    $('tracking-body').hidden = expanded;
+  });
+
+  // Toggle principal: se Free e tentou marcar, abre modal de upgrade
+  $('tracking-enabled').addEventListener('change', (e) => {
+    if (!state.planFeatures.tracking) {
+      // UI já bloqueia via disabled, mas defesa em profundidade
+      e.target.checked = false;
+      openUpgradeProModal();
+      return;
+    }
+    // Habilita/desabilita sub-checkboxes conforme o principal
+    state.draftFunnel.trackingEnabled = e.target.checked;
+    renderTrackingSection();
+  });
+
+  // Click na linha bloqueada (Free) também abre modal de upgrade
+  $('tracking-enabled').parentElement.addEventListener('click', (e) => {
+    if (!state.planFeatures.tracking && e.target.tagName !== 'INPUT') {
+      openUpgradeProModal();
+    }
+  });
+}
+
+function openUpgradeProModal() {
+  // PANEL_URL vem do config.js — build-replaced pra prod
+  $('btn-upgrade-link').href = `${PANEL_URL}/assinatura?upgrade=pro`;
+  $('modal-upgrade-pro').showModal();
+}
+
+async function loadPlanFeatures() {
+  try {
+    const stored = await chrome.storage.local.get('zf_plan_features');
+    state.planFeatures = stored.zf_plan_features || {};
+  } catch (_) {
+    state.planFeatures = {};
+  }
+  // Observa mudanças (ex: user faz upgrade pra Pro e novo /validate
+  // pelo content script atualiza o storage — manager reflete na hora).
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (changes.zf_plan_features) {
+        state.planFeatures = changes.zf_plan_features.newValue || {};
+        // Se o modal de funil estiver aberto, re-renderiza pra refletir
+        if (state.draftFunnel && $('modal-funnel').open) {
+          renderTrackingSection();
+        }
+      }
+    });
+  }
 }
 
 async function handleHashFocus() {

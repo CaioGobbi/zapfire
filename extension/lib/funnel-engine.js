@@ -4,7 +4,7 @@
 // Executa funis (sequência de items com delay entre cada step).
 //
 // API:
-//   const run = runFunnel(funnelId, { sendItem, onProgress });
+//   const run = runFunnel(funnelId, { sendItem, onProgress, ...hooks });
 //   await run.promise; // { ok, completed, cancelled? }
 //   run.cancel();      // interrompe a execução em andamento
 //
@@ -17,6 +17,17 @@
 //       { phase: 'sending',  current, total, item }
 //       { phase: 'sent',     current, total, item }
 //       { phase: 'error',    current, total, item?, error }
+//
+//   - Sprint 5 — hooks de telemetria (todos opcionais):
+//       onRunStart({ runId, funnelId, totalSteps })
+//       onStepComplete({ runId, stepIndex, totalSteps, item, sentAt })
+//       onStepError({ runId, stepIndex, totalSteps, item?, error, sentAt })
+//       onRunFinish({ runId, status, completed, total, finishedAt })
+//         → status: 'completed' | 'cancelled' | 'failed'
+//
+//     Esses hooks são invocados try/catch — exceção neles NÃO
+//     interrompe o runner. funnel-tracker.js usa isso pra escrever
+//     no IndexedDB sem afetar a lógica de envio.
 //
 // IMPORTANTE: a engine roda no contexto que a chamou. No caso
 // da sidebar, isso é o iframe da extensão. Enquanto o iframe
@@ -49,7 +60,14 @@ function withSendLock(fn) {
   return next;
 }
 
-export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
+export function runFunnel(funnelId, opts = {}) {
+  const { sendItem, onProgress } = opts;
+  // Hooks de telemetria (Sprint 5) — opcionais, isolados em try/catch
+  const onRunStart = opts.onRunStart;
+  const onStepComplete = opts.onStepComplete;
+  const onStepError = opts.onStepError;
+  const onRunFinish = opts.onRunFinish;
+
   if (typeof sendItem !== 'function') {
     throw new Error('runFunnel requer sendItem(item) callback');
   }
@@ -61,16 +79,26 @@ export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
   const emit = (ev) => {
     try { onProgress?.(ev); } catch (_) {}
   };
+  // Wrapper único pros hooks novos — qualquer throw vira no-op
+  const safeHook = (fn, payload) => {
+    if (typeof fn !== 'function') return;
+    try { fn(payload); } catch (_) {}
+  };
 
   const promise = (async () => {
     const funnel = await getFunnel(funnelId);
     if (!funnel) {
       activeRuns.delete(runId);
+      // Não emite onRunFinish aqui pq onRunStart também não foi emitido
+      // (sem totalSteps confiável). Quem precisa de start+finish sempre
+      // pareados deve checar antes que o funil existe.
       return { ok: false, error: 'Funil não encontrado' };
     }
 
     const total = funnel.steps.length;
     let completed = 0;
+
+    safeHook(onRunStart, { runId, funnelId, totalSteps: total });
 
     for (let i = 0; i < total; i++) {
       if (controller.cancelled) break;
@@ -93,6 +121,13 @@ export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
           total,
           error: 'Item não encontrado (foi excluído?)',
         });
+        safeHook(onStepError, {
+          runId,
+          stepIndex: i,
+          totalSteps: total,
+          error: 'Item não encontrado (foi excluído?)',
+          sentAt: Date.now(),
+        });
         // Não trava o funil — segue pro próximo
         continue;
       }
@@ -112,6 +147,13 @@ export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
         completed++;
         await incrementItemUses(item.id);
         emit({ phase: 'sent', current: i + 1, total, item });
+        safeHook(onStepComplete, {
+          runId,
+          stepIndex: i,
+          totalSteps: total,
+          item,
+          sentAt: Date.now(),
+        });
       } else {
         emit({
           phase: 'error',
@@ -119,6 +161,14 @@ export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
           total,
           item,
           error: result?.error || 'Falha desconhecida',
+        });
+        safeHook(onStepError, {
+          runId,
+          stepIndex: i,
+          totalSteps: total,
+          item,
+          error: result?.error || 'Falha desconhecida',
+          sentAt: Date.now(),
         });
         // Pra MVP segue mesmo com erro — facilita testar funis
         // grandes sem precisar começar tudo de novo. Iteração
@@ -128,9 +178,16 @@ export function runFunnel(funnelId, { sendItem, onProgress } = {}) {
 
     activeRuns.delete(runId);
 
+    const finishedAt = Date.now();
     if (controller.cancelled) {
+      safeHook(onRunFinish, { runId, status: 'cancelled', completed, total, finishedAt });
       return { ok: false, cancelled: true, completed };
     }
+    // "completed" = todos os steps foram disparados com sucesso.
+    // "failed" = passou por todos mas algum não foi (item missing,
+    // send rejeitado, etc). Decisão de Sprint 5 — não rastreamos ack.
+    const finalStatus = completed === total ? 'completed' : 'failed';
+    safeHook(onRunFinish, { runId, status: finalStatus, completed, total, finishedAt });
     return { ok: true, completed };
   })();
 

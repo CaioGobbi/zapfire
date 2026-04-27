@@ -21,6 +21,11 @@ const STORAGE_KEYS = {
   // Populado após cada /auth/validate + /heartbeat. Consumido pelo banner
   // de grace e pelo gate de envio client-side (sidebar, quickbar, popup).
   LICENSE_STATE: 'zf_license_state',
+  // Sprint 5 — features do plano atual (tracking, dailyReport,
+  // maxMonitoredFunnels). Espelha plan.features do backend pra que UI
+  // (manager, sidebar) leia sem precisar refazer /validate só pra ler.
+  // Observada via chrome.storage.onChanged pelo manager.
+  PLAN_FEATURES: 'zf_plan_features',
 };
 
 // Converte a resposta do /auth/validate (sucesso ou falha) no shape
@@ -78,6 +83,9 @@ async function validateKey({ keyValue, phone }) {
         [STORAGE_KEYS.KEY_VALUE]: keyValue,
         [STORAGE_KEYS.AUTH_STATE]: data.data,
         [STORAGE_KEYS.LAST_VALIDATED]: Date.now(),
+        // Sprint 5 — espelha plan.features pra UI consultar sem rede.
+        // {} se backend não retornar (ex: plano legacy sem features setado).
+        [STORAGE_KEYS.PLAN_FEATURES]: data.data?.plan?.features || {},
       });
     }
 
@@ -168,6 +176,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           STORAGE_KEYS.AUTH_STATE,
           STORAGE_KEYS.LAST_VALIDATED,
           STORAGE_KEYS.LICENSE_STATE,
+          STORAGE_KEYS.PLAN_FEATURES,
         ]);
         // Nota: deviceId NÃO é removido — ele persiste entre logins
         sendResponse({ ok: true });

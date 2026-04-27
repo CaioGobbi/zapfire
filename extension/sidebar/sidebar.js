@@ -29,6 +29,9 @@ import {
   incrementItemUses,
 } from '../lib/storage.js';
 import { runFunnel } from '../lib/funnel-engine.js';
+// Sprint 5 — wrapper que registra runs em funnel_runs quando o funil
+// tem trackingEnabled. Pra funis sem tracking é passthrough direto.
+import { runFunnelWithTracking } from '../lib/funnel-tracker.js';
 import {
   subscribeLicenseState,
   renderBannerInto,
@@ -401,6 +404,16 @@ function funnelCard(funnel) {
   titleText.textContent = funnel.name;
   leftSide.appendChild(titleText);
 
+  // Sprint 5 — indicador discreto de tracking ativo
+  if (funnel.trackingEnabled) {
+    const trackBadge = document.createElement('span');
+    trackBadge.className = 'card-track-badge';
+    trackBadge.title = 'Funil monitorado — leads que chegarem ao final aparecem em Relatórios';
+    // SVG de "barras de relatório" estilo Lucide
+    trackBadge.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>';
+    leftSide.appendChild(trackBadge);
+  }
+
   head.appendChild(leftSide);
 
   const chevron = document.createElement('button');
@@ -696,7 +709,10 @@ async function handleRunFunnel(funnel) {
   // (que precisa checar cancellation durante retries longos)
   const tempRunId = crypto.randomUUID();
   const sendItem = makeAnchoredSender(target, tempRunId);
-  const run = runFunnel(funnel.id, {
+  // Sprint 5 — runFunnelWithTracking faz passthrough se trackingEnabled=false,
+  // ou registra os hooks de telemetria se trackingEnabled=true.
+  // Mantém os mesmos sendItem/onProgress que sempre usamos.
+  const run = runFunnelWithTracking(funnel, target, {
     sendItem,
     onProgress: (ev) => onRunProgress(tempRunId, ev),
   });

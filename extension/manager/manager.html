@@ -153,6 +153,48 @@
           </div>
           <button type="button" class="btn-ghost btn-add-step" id="btn-add-step">+ Adicionar item</button>
         </div>
+
+        <!-- Sprint 5 — Seção colapsável de monitoramento -->
+        <div class="tracking-section">
+          <button type="button" class="tracking-header" id="tracking-toggle" aria-expanded="false">
+            <span class="tracking-chevron" aria-hidden="true">▸</span>
+            <span class="tracking-title">Monitoramento</span>
+            <span class="tracking-pro-badge" id="tracking-pro-badge" hidden>Pro</span>
+          </button>
+          <div class="tracking-body" id="tracking-body" hidden>
+            <label class="tracking-row">
+              <input type="checkbox" id="tracking-enabled" />
+              <span>
+                <strong>Acompanhar leads neste funil</strong>
+                <small>Registra quem chegou ao final pra você ver no painel "Relatórios".</small>
+              </span>
+            </label>
+
+            <div class="tracking-pro-group" id="tracking-pro-group">
+              <div class="tracking-pro-label">Apenas com plano Pro:</div>
+              <label class="tracking-row tracking-row--sub">
+                <input type="checkbox" id="tracking-notify" />
+                <span>
+                  <strong>Notificar imediatamente</strong>
+                  <small>Toast em tempo real quando um lead completar.</small>
+                </span>
+              </label>
+              <label class="tracking-row tracking-row--sub">
+                <input type="checkbox" id="tracking-daily" />
+                <span>
+                  <strong>Incluir no relatório diário</strong>
+                  <small>Entra no resumo entregue no seu próprio WhatsApp.</small>
+                </span>
+              </label>
+            </div>
+
+            <label class="field tracking-label-field">
+              <span>Nome no relatório (opcional)</span>
+              <input type="text" id="tracking-label" maxlength="80"
+                placeholder="Default: usa o nome do funil acima" />
+            </label>
+          </div>
+        </div>
       </div>
 
       <footer class="modal-footer">
@@ -314,6 +356,35 @@
       <button type="button" class="btn-ghost" data-close="modal-backup">Fechar</button>
       <button type="button" class="btn-primary" id="btn-do-import" disabled>Importar tudo</button>
     </footer>
+  </dialog>
+
+  <!-- Sprint 5 — Modal de upgrade Pro -->
+  <dialog class="modal" id="modal-upgrade-pro">
+    <div class="modal-form">
+      <header class="modal-header">
+        <h2>Disponível no plano Pro</h2>
+        <button type="button" class="modal-close" data-close="modal-upgrade-pro">×</button>
+      </header>
+      <div class="modal-body">
+        <p style="margin-bottom: 12px;">
+          O <strong>monitoramento de funis</strong> registra quais leads chegaram ao final
+          de cada funil, te permite ver relatórios diários no painel e receber resumos
+          automáticos no seu próprio WhatsApp.
+        </p>
+        <ul style="margin: 0 0 12px 18px; line-height: 1.6; color: var(--text-dim);">
+          <li>Acompanhe até <strong>10 funis simultâneos</strong></li>
+          <li>Relatório diário no horário que você escolher</li>
+          <li>Notificações em tempo real quando um lead completar</li>
+          <li>Histórico de 90 dias localmente — privacidade total</li>
+        </ul>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" data-close="modal-upgrade-pro">Agora não</button>
+        <a class="btn-primary" id="btn-upgrade-link" href="#" target="_blank" rel="noopener noreferrer">
+          Fazer upgrade pra Pro
+        </a>
+      </footer>
+    </div>
   </dialog>
 
   <!-- Toast -->
