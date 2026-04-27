@@ -606,6 +606,7 @@ function KeyCard({ k, onAction }: { k: KeyDetail; onAction: () => void }) {
 function SubCard({ s, onAction }: { s: SubscriptionDetail; onAction: () => void }) {
   const [extendOpen, setExtendOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
@@ -637,6 +638,9 @@ function SubCard({ s, onAction }: { s: SubscriptionDetail; onAction: () => void 
             <CalendarPlus className="w-3.5 h-3.5 mr-1.5" />
             Estender
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setPlanOpen(true)}>
+            Mudar plano
+          </Button>
           <Button size="sm" variant="outline" onClick={() => setStatusOpen(true)}>
             Mudar status
           </Button>
@@ -647,6 +651,11 @@ function SubCard({ s, onAction }: { s: SubscriptionDetail; onAction: () => void 
         open={extendOpen} onOpenChange={setExtendOpen}
         subId={s.id} currentEnd={s.currentPeriodEnd}
         onDone={() => { setExtendOpen(false); onAction(); }}
+      />
+      <ChangePlanDialog
+        open={planOpen} onOpenChange={setPlanOpen}
+        subId={s.id} currentPlanCode={s.plan.code} currentPlanName={s.plan.name}
+        onDone={() => { setPlanOpen(false); onAction(); }}
       />
       <SetStatusDialog
         open={statusOpen} onOpenChange={setStatusOpen}
@@ -749,6 +758,72 @@ function ExtendDialog({ open, onOpenChange, subId, currentEnd, onDone }: any) {
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
           <Button onClick={go} disabled={busy}>{busy ? 'Estendendo…' : 'Estender'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Hardcoded por simplicidade — quando virar > 5 planos ou variar muito,
+// criar GET /admin/plans no backend e popular via fetch.
+const PLAN_OPTIONS = [
+  { code: 'monthly_v1', name: 'Mensal (R$47) — Free' },
+  { code: 'annual_v1',  name: 'Anual (R$395) — Free' },
+  { code: 'pro_v1',     name: 'Pro (R$97) — tracking + relatórios' },
+  { code: 'monthly_x1', name: 'Mensal X1 (R$97) — legado' },
+];
+
+function ChangePlanDialog({ open, onOpenChange, subId, currentPlanCode, currentPlanName, onDone }: any) {
+  const [planCode, setPlanCode] = useState(currentPlanCode);
+  const [busy, setBusy] = useState(false);
+
+  async function go() {
+    if (planCode === currentPlanCode) {
+      toast.warning('Selecione um plano diferente');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await apiPost<{ ok: boolean; message?: string; newPlanName?: string }>(
+        `/admin/subscriptions/${subId}/change-plan`,
+        { planCode },
+      );
+      toast.success(res.message || `Plano alterado pra ${res.newPlanName || planCode}`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Mudar plano da assinatura</DialogTitle>
+          <DialogDescription>
+            Plano atual: <strong>{currentPlanName}</strong>. Mudar plano só altera
+            o vínculo + features (ex: liberar tracking pro Pro). Não toca em
+            <code className="mx-1 px-1.5 py-0.5 rounded bg-muted text-xs">currentPeriodEnd</code>
+            — pra estender prazo, use "Estender" separadamente. O usuário precisa
+            relogar/refresh no WA Web pra UI refletir as features novas.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="plan-code">Novo plano</Label>
+          <select
+            id="plan-code"
+            value={planCode}
+            onChange={(e) => setPlanCode(e.target.value)}
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            {PLAN_OPTIONS.map((p) => (
+              <option key={p.code} value={p.code}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
+          <Button onClick={go} disabled={busy}>{busy ? 'Alterando…' : 'Mudar plano'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

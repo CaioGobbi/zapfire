@@ -468,6 +468,67 @@ export default async function adminRoutes(fastify) {
   });
 
   // ====================================================
+  // POST /subscriptions/:id/change-plan — troca planId
+  // ====================================================
+  // Útil pra promover Free → Pro pra teste interno ou cortesia,
+  // ou rebaixar caso de chargeback. Não mexe em datas (só no plano)
+  // — pra renovar prazo, usar /extend separadamente.
+  fastify.post('/subscriptions/:id/change-plan', ADMIN_GUARDS, async (request, reply) => {
+    const parsed = z
+      .object({ planCode: z.string().min(1).max(40) })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: 'BAD_REQUEST' });
+
+    const sub = await prisma.subscription.findUnique({
+      where: { id: request.params.id },
+      include: { plan: true },
+    });
+    if (!sub) return reply.code(404).send({ ok: false, code: 'SUBSCRIPTION_NOT_FOUND' });
+
+    const newPlan = await prisma.plan.findUnique({ where: { code: parsed.data.planCode } });
+    if (!newPlan) return reply.code(404).send({ ok: false, code: 'PLAN_NOT_FOUND' });
+
+    // No-op se já está no plano alvo
+    if (newPlan.id === sub.planId) {
+      return reply.code(200).send({
+        ok: true,
+        message: 'Assinatura já está nesse plano',
+        unchanged: true,
+      });
+    }
+
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: { planId: newPlan.id },
+    });
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.subscription.plan_changed',
+        entityType: 'Subscription',
+        entityId: sub.id,
+        metadata: {
+          forUserId: sub.userId,
+          previousPlanCode: sub.plan?.code,
+          previousPlanName: sub.plan?.name,
+          newPlanCode: newPlan.code,
+          newPlanName: newPlan.name,
+          // Snapshot de features pra auditar mudanças de gate (Sprint 5)
+          previousFeatures: sub.plan?.features,
+          newFeatures: newPlan.features,
+        },
+        ipAddress: getIp(request),
+      },
+    });
+    return reply.code(200).send({
+      ok: true,
+      message: `Plano alterado de "${sub.plan?.name}" pra "${newPlan.name}"`,
+      newPlanCode: newPlan.code,
+      newPlanName: newPlan.name,
+    });
+  });
+
+  // ====================================================
   // POST /subscriptions/:id/set-status — muda status manualmente
   // ====================================================
   fastify.post('/subscriptions/:id/set-status', ADMIN_GUARDS, async (request, reply) => {
