@@ -350,6 +350,27 @@
               isPtt: !!msg.isPtt,
             });
             break;
+          // Sprint 5 — abre conversa pelo JID (usado pelo botão
+          // "Abrir conversa" da tab Relatórios no manager). Usa
+          // WPP.chat.openChatBottom que rola até a última mensagem.
+          case 'ZF_API_OPEN_CHAT':
+            try {
+              if (!window.WPP?.chat) {
+                result = { ok: false, error: 'WPP indisponível' };
+              } else if (typeof window.WPP.chat.openChatBottom === 'function') {
+                await window.WPP.chat.openChatBottom(msg.jid);
+                result = { ok: true };
+              } else if (typeof window.WPP.chat.openChat === 'function') {
+                // Fallback se WA-JS futuro renomear
+                await window.WPP.chat.openChat(msg.jid);
+                result = { ok: true };
+              } else {
+                result = { ok: false, error: 'WPP.chat.openChatBottom não existe nessa versão' };
+              }
+            } catch (e) {
+              result = { ok: false, error: e.message || String(e) };
+            }
+            break;
           default:
             result = { ok: false, error: 'tipo desconhecido: ' + msg.type };
         }

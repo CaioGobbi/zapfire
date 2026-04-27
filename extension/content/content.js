@@ -995,11 +995,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'ZF_OPEN_CHAT_FROM_MANAGER') {
     // Abre o chat do JID na própria aba do WA. Manager já focou a tab
-    // antes via chrome.tabs.update — aqui só executa o switch.
+    // antes via chrome.tabs.update. Usa WPP.chat.openChatBottom (via
+    // injected.js) — switchToChat só DETECTA chat aberto, não navega
+    // (WA Web bloqueia clicks sintéticos no DOM, então a única rota
+    // confiável é a API interna do WA via WPP).
     (async () => {
       try {
-        const target = { jid: message.jid, name: message.name };
-        const result = await switchToChat(target);
+        const result = await callInjectedApi('ZF_API_OPEN_CHAT', { jid: message.jid });
         sendResponse(result);
       } catch (err) {
         sendResponse({ ok: false, error: err.message || String(err) });
