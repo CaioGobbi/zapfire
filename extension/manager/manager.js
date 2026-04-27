@@ -35,6 +35,9 @@ const state = {
   // Sprint 5 — features do plano (espelho do zf_plan_features no chrome.storage)
   // Default {} = Free (todos os checks `!!features.tracking` viram false).
   planFeatures: {},
+  // Sprint 5 — filtros da tab Relatórios
+  reportsPeriod: 'today',   // 'today' | '7d' | '30d'
+  reportsFunnelId: 'all',   // 'all' | <funnelId>
 };
 
 // Quais types do storage cada filtro mostra
@@ -220,6 +223,12 @@ async function renderList() {
     return;
   }
 
+  // Sprint 5 — Tab Relatórios
+  if (state.filter === 'reports') {
+    await renderReports(grid);
+    return;
+  }
+
   if (state.filter === 'funnels') {
     const funnels = await storage.listFunnels();
     const filtered = state.search
@@ -262,6 +271,21 @@ async function renderDashboard(container) {
     if (label) userName = label;
   } catch (_) {}
 
+  // Sprint 5 — card de Funis Monitorados (Hoje)
+  const monitoredFunnels = funnels.filter((f) => f.trackingEnabled);
+  const isPro = !!state.planFeatures.tracking;
+  const todayRange = periodToRange('today');
+  const todayRuns = await storage.listRuns({
+    status: 'completed',
+    since: todayRange.since,
+    until: todayRange.until,
+  });
+  const monitoringCardHtml = renderMonitoringCardHTML({
+    monitoredFunnels,
+    todayRuns,
+    isPro,
+  });
+
   container.classList.add('dashboard-grid');
   container.innerHTML = `
     <div class="dashboard-welcome">
@@ -276,12 +300,412 @@ async function renderDashboard(container) {
       ${statCardHTML('media',  'Mídias', counts.media, 'image')}
       ${statCardHTML('file',   'Documentos', counts.file, 'file')}
     </div>
+
+    ${monitoringCardHtml}
   `;
 
   // Clicks em cards → navega pro filtro respectivo
   container.querySelectorAll('.stat-card').forEach((btn) => {
     btn.addEventListener('click', () => setActiveFilter(btn.dataset.target));
   });
+
+  // Sprint 5 — wires do monitoring card
+  const seeAllBtn = container.querySelector('[data-action="see-reports"]');
+  if (seeAllBtn) seeAllBtn.addEventListener('click', () => setActiveFilter('reports'));
+  const ctaBtn = container.querySelector('[data-action="enable-tracking-cta"]');
+  if (ctaBtn) ctaBtn.addEventListener('click', () => setActiveFilter('funnels'));
+  const upgradeBtn = container.querySelector('[data-action="upgrade-pro"]');
+  if (upgradeBtn) upgradeBtn.addEventListener('click', () => openUpgradeProModal());
+}
+
+// Sprint 5 — Card "Funis Monitorados (Hoje)" no dashboard.
+// 3 estados: Free (preview com badge Pro), Pro sem tracking ativo
+// (CTA pra ativar), Pro com tracking ativo (lista contagens).
+function renderMonitoringCardHTML({ monitoredFunnels, todayRuns, isPro }) {
+  const headerSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>';
+
+  // Estado 1: Free → preview bloqueado com badge Pro
+  if (!isPro) {
+    return `
+      <div class="monitoring-card monitoring-card--locked">
+        <div class="monitoring-header">
+          <span class="monitoring-icon">${headerSvg}</span>
+          <span class="monitoring-title">Funis Monitorados</span>
+          <span class="tracking-pro-badge">Pro</span>
+        </div>
+        <p class="monitoring-empty">
+          Acompanhe quais leads chegaram ao final dos seus funis e receba relatórios
+          diários no seu próprio WhatsApp.
+        </p>
+        <button class="btn-primary" data-action="upgrade-pro">Conhecer o plano Pro</button>
+      </div>
+    `;
+  }
+
+  // Estado 2: Pro mas nenhum funil tem tracking ativo
+  if (monitoredFunnels.length === 0) {
+    return `
+      <div class="monitoring-card">
+        <div class="monitoring-header">
+          <span class="monitoring-icon">${headerSvg}</span>
+          <span class="monitoring-title">Funis Monitorados</span>
+        </div>
+        <p class="monitoring-empty">
+          Nenhum funil com acompanhamento ativo ainda.
+        </p>
+        <button class="btn-ghost" data-action="enable-tracking-cta">
+          Ativar acompanhamento num funil →
+        </button>
+      </div>
+    `;
+  }
+
+  // Estado 3: Pro com funis monitorados — agrupa runs do dia por funnelId
+  const countsByFunnel = new Map();
+  for (const run of todayRuns) {
+    countsByFunnel.set(run.funnelId, (countsByFunnel.get(run.funnelId) || 0) + 1);
+  }
+  const total = todayRuns.length;
+  // Mostra TODOS os funis monitorados (mesmo com 0 hoje), ordenados
+  // por quantidade desc — assim o user vê quais estão "vivos".
+  const rows = monitoredFunnels
+    .map((f) => ({
+      name: f.trackingLabel || f.name,
+      count: countsByFunnel.get(f.id) || 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  // Barra visual: máximo entre todas as contagens (escala relativa)
+  const maxCount = rows.reduce((m, r) => Math.max(m, r.count), 0) || 1;
+
+  const rowsHtml = rows.map((r) => {
+    const barWidth = Math.round((r.count / maxCount) * 100);
+    return `
+      <div class="monitoring-row">
+        <span class="monitoring-row-name">${escapeHTML(r.name)}</span>
+        <div class="monitoring-row-bar">
+          <div class="monitoring-row-fill" style="width: ${barWidth}%"></div>
+        </div>
+        <span class="monitoring-row-count">${r.count}</span>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="monitoring-card">
+      <div class="monitoring-header">
+        <span class="monitoring-icon">${headerSvg}</span>
+        <span class="monitoring-title">Funis Monitorados (Hoje)</span>
+      </div>
+      <div class="monitoring-rows">
+        ${rowsHtml}
+      </div>
+      <div class="monitoring-footer">
+        <strong>Total: ${total} ${total === 1 ? 'lead completou um funil hoje' : 'leads completaram funis hoje'}</strong>
+        <button class="btn-ghost" data-action="see-reports">Ver relatório completo →</button>
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================
+// Sprint 5 — Tab "Relatórios"
+// ============================================================
+
+// Converte período do filtro em { since, until } em ms.
+// 'today' = de 00:00 do dia local até agora.
+// '7d'   = últimas 168h (rolling).
+// '30d'  = últimas 720h (rolling).
+function periodToRange(period) {
+  const now = Date.now();
+  if (period === 'today') {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return { since: start.getTime(), until: now };
+  }
+  if (period === '7d') return { since: now - 7 * 86400_000, until: now };
+  if (period === '30d') return { since: now - 30 * 86400_000, until: now };
+  return { since: 0, until: now };
+}
+
+const PERIOD_LABELS = {
+  today: 'Hoje',
+  '7d':  'Últimos 7 dias',
+  '30d': 'Últimos 30 dias',
+};
+
+function formatRunTime(ms) {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+// Texto enviado pro próprio WhatsApp na ação "Enviar agora".
+// Limita a 10 leads por funil pra não estourar tamanho de mensagem.
+function generateReportText(runsByFunnel, periodLabel) {
+  const lines = [];
+  const todayStr = new Date().toLocaleDateString('pt-BR');
+  lines.push(`🎯 Relatório Zapfire — ${periodLabel} (${todayStr})`);
+  lines.push('');
+
+  let totalLeads = 0;
+  for (const group of runsByFunnel) {
+    if (!group.runs.length) continue;
+    totalLeads += group.runs.length;
+    lines.push(group.name.toUpperCase());
+    lines.push(`✅ ${group.runs.length} ${group.runs.length === 1 ? 'lead chegou' : 'leads chegaram'} ao final`);
+    const shown = group.runs.slice(0, 10);
+    for (const r of shown) {
+      const name = r.leadName || (r.leadJid?.split('@')[0]) || 'Sem nome';
+      lines.push(`• ${name} — ${formatRunTime(r.finishedAt || r.startedAt)}`);
+    }
+    if (group.runs.length > 10) {
+      lines.push(`• + ${group.runs.length - 10} outro(s)`);
+    }
+    lines.push('');
+  }
+
+  if (totalLeads === 0) {
+    lines.push('Nenhum lead completou funis monitorados nesse período.');
+  } else {
+    lines.push(`📊 Total: ${totalLeads} ${totalLeads === 1 ? 'lead completou' : 'leads completaram'} funis monitorados`);
+  }
+  return lines.join('\n');
+}
+
+// Manda mensagem pra primeira aba do WA Web.
+// Retorna { ok, error?, noTab? } pra UI mostrar mensagem certa.
+async function callWAWebTab(message) {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    if (!tabs || tabs.length === 0) {
+      return { ok: false, noTab: true, error: 'Abra o WhatsApp Web primeiro' };
+    }
+    const tab = tabs[0];
+    const result = await chrome.tabs.sendMessage(tab.id, message);
+    return result || { ok: false, error: 'Sem resposta do content script' };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+// "Abrir conversa" — foca a tab do WA Web e abre o chat do JID.
+async function openChatViaWAWeb(jid, name) {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    if (!tabs || tabs.length === 0) {
+      toast('Abra o WhatsApp Web primeiro', 'warning');
+      return;
+    }
+    const tab = tabs[0];
+    // Foca a aba + janela ANTES de mandar a mensagem
+    await chrome.tabs.update(tab.id, { active: true });
+    if (tab.windowId) {
+      try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
+    }
+    const result = await chrome.tabs.sendMessage(tab.id, {
+      type: 'ZF_OPEN_CHAT_FROM_MANAGER',
+      jid,
+      name,
+    });
+    if (!result?.ok) {
+      toast('Não consegui abrir a conversa: ' + (result?.error || 'erro'), 'error');
+    }
+  } catch (err) {
+    toast('Falha ao abrir conversa: ' + (err.message || err), 'error');
+  }
+}
+
+async function renderReports(container) {
+  container.classList.remove('dashboard-grid');
+  const isPro = !!state.planFeatures.tracking;
+
+  // Free: tela bloqueada com badge Pro
+  if (!isPro) {
+    container.innerHTML = `
+      <div class="reports-locked">
+        <div class="monitoring-icon" style="margin-bottom: 16px; color: var(--type-funnel);">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+        </div>
+        <h2 style="margin-bottom: 8px;">Relatórios — disponível no Pro</h2>
+        <p style="color: var(--text-dim); max-width: 520px; margin: 0 auto 20px;">
+          Acompanhe quais leads chegaram ao final dos funis monitorados, filtre por
+          período e funil, e receba relatórios diários no seu próprio WhatsApp.
+        </p>
+        <button class="btn-primary" id="btn-reports-upgrade">Conhecer o plano Pro</button>
+      </div>
+    `;
+    container.querySelector('#btn-reports-upgrade').addEventListener('click', openUpgradeProModal);
+    return;
+  }
+
+  const funnels = await storage.listFunnels();
+  const monitoredFunnels = funnels.filter((f) => f.trackingEnabled);
+
+  const range = periodToRange(state.reportsPeriod);
+  const filters = {
+    status: 'completed',
+    since: range.since,
+    until: range.until,
+  };
+  if (state.reportsFunnelId !== 'all') filters.funnelId = state.reportsFunnelId;
+
+  const runs = await storage.listRuns(filters);
+
+  // Agrupa por funnelId mantendo ordem dos monitoredFunnels (que vem por createdAt DESC).
+  const runsByFunnel = monitoredFunnels.map((f) => ({
+    funnelId: f.id,
+    name: f.trackingLabel || f.name,
+    runs: runs.filter((r) => r.funnelId === f.id),
+  }));
+
+  // Funis que não estão mais ativos mas têm runs (ex: funil deletado depois)
+  const activeIds = new Set(monitoredFunnels.map((f) => f.id));
+  const orphanGroups = new Map();
+  for (const r of runs) {
+    if (!activeIds.has(r.funnelId)) {
+      const key = r.funnelId;
+      if (!orphanGroups.has(key)) {
+        orphanGroups.set(key, { funnelId: key, name: r.funnelName + ' (apagado)', runs: [] });
+      }
+      orphanGroups.get(key).runs.push(r);
+    }
+  }
+  for (const group of orphanGroups.values()) runsByFunnel.push(group);
+
+  const groupsHtml = runsByFunnel.map(renderRunsGroup).join('');
+  const emptyHtml = runs.length === 0
+    ? `<div class="reports-empty">Nenhum lead completou funis monitorados nesse período.</div>`
+    : '';
+
+  const funnelOptions = ['<option value="all">Todos os funis</option>']
+    .concat(monitoredFunnels.map((f) =>
+      `<option value="${escapeHTML(f.id)}" ${state.reportsFunnelId === f.id ? 'selected' : ''}>${escapeHTML(f.trackingLabel || f.name)}</option>`
+    )).join('');
+
+  container.innerHTML = `
+    <div class="reports">
+      <header class="reports-header">
+        <h2>Relatórios</h2>
+        <p class="reports-sub">Funis com acompanhamento ativo — leads que chegaram ao final.</p>
+      </header>
+
+      <div class="reports-filters">
+        <label class="reports-filter">
+          <span>Período</span>
+          <select id="reports-period">
+            <option value="today" ${state.reportsPeriod === 'today' ? 'selected' : ''}>Hoje</option>
+            <option value="7d"    ${state.reportsPeriod === '7d' ? 'selected' : ''}>Últimos 7 dias</option>
+            <option value="30d"   ${state.reportsPeriod === '30d' ? 'selected' : ''}>Últimos 30 dias</option>
+          </select>
+        </label>
+        <label class="reports-filter">
+          <span>Funil</span>
+          <select id="reports-funnel">${funnelOptions}</select>
+        </label>
+      </div>
+
+      <div class="reports-list">
+        ${groupsHtml}
+        ${emptyHtml}
+      </div>
+
+      <footer class="reports-actions">
+        <button class="btn-primary" id="btn-send-now">Enviar relatório agora pro meu WhatsApp</button>
+        <button class="btn-ghost" id="btn-config-delivery" disabled title="Disponível em breve (Sprint 5 ETAPA C)">
+          Configurar entrega automática
+        </button>
+      </footer>
+    </div>
+  `;
+
+  // Wires dos filtros
+  $('reports-period').addEventListener('change', (e) => {
+    state.reportsPeriod = e.target.value;
+    renderReports(container);
+  });
+  $('reports-funnel').addEventListener('change', (e) => {
+    state.reportsFunnelId = e.target.value;
+    renderReports(container);
+  });
+
+  // Click em "Abrir conversa" pra cada lead
+  container.querySelectorAll('[data-action="open-chat"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const jid = btn.dataset.jid;
+      const name = btn.dataset.name || '';
+      openChatViaWAWeb(jid, name);
+    });
+  });
+
+  // Click em "Enviar agora"
+  $('btn-send-now').addEventListener('click', async () => {
+    if (runs.length === 0) {
+      toast('Nada pra enviar — nenhum lead completou nesse período', 'warning');
+      return;
+    }
+    const text = generateReportText(runsByFunnel, PERIOD_LABELS[state.reportsPeriod]);
+    const btn = $('btn-send-now');
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = 'Enviando...';
+    try {
+      const result = await callWAWebTab({ type: 'ZF_SEND_REPORT_FROM_MANAGER', text });
+      if (result.ok) {
+        toast('Relatório enviado pro seu WhatsApp ✓', 'success');
+      } else if (result.noTab) {
+        toast('Abra o WhatsApp Web primeiro pra enviar o relatório', 'warning');
+      } else {
+        toast('Falha no envio: ' + (result.error || 'erro desconhecido'), 'error');
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldLabel;
+    }
+  });
+}
+
+// Render de um grupo (1 funil monitorado) na lista de Relatórios
+function renderRunsGroup(group) {
+  if (!group.runs.length) {
+    return `
+      <details class="reports-group">
+        <summary>
+          <span class="reports-group-name">${escapeHTML(group.name)}</span>
+          <span class="reports-group-count">0</span>
+        </summary>
+        <div class="reports-group-empty">Sem leads neste período.</div>
+      </details>
+    `;
+  }
+
+  const leadsHtml = group.runs.map((r) => {
+    const name = r.leadName || (r.leadJid?.split('@')[0]) || 'Sem nome';
+    const time = formatRunTime(r.finishedAt || r.startedAt);
+    return `
+      <div class="reports-lead">
+        <span class="reports-lead-name">${escapeHTML(name)}</span>
+        <span class="reports-lead-time">${time}</span>
+        <button class="btn-ghost reports-lead-open" data-action="open-chat"
+                data-jid="${escapeHTML(r.leadJid)}" data-name="${escapeHTML(name)}">
+          Abrir conversa
+        </button>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <details class="reports-group" open>
+      <summary>
+        <span class="reports-group-name">${escapeHTML(group.name)}</span>
+        <span class="reports-group-count">${group.runs.length} ${group.runs.length === 1 ? 'lead' : 'leads'}</span>
+      </summary>
+      <div class="reports-leads">
+        ${leadsHtml}
+      </div>
+    </details>
+  `;
 }
 
 function statCardHTML(colorKey, label, count, targetFilter) {
@@ -1425,6 +1849,16 @@ function init() {
   setupTrackingWiring();
   // Carrega plan.features do chrome.storage e observa mudanças
   loadPlanFeatures();
+
+  // Sprint 5 — Retention policy: apaga runs com finishedAt < 90d.
+  // Roda em background, não bloqueia o init. 90d é hardcoded por agora —
+  // configurável via meta storage no futuro se virar pedido.
+  const RETENTION_MS = 90 * 86400_000;
+  storage.deleteRunsOlderThan(Date.now() - RETENTION_MS).then((n) => {
+    if (n > 0) console.log(`[Zapfire][manager] retention: ${n} runs antigos removidos (>90d)`);
+  }).catch((err) => {
+    console.warn('[Zapfire][manager] retention falhou:', err);
+  });
 
   renderList();
 }

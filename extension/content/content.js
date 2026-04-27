@@ -967,7 +967,7 @@ function startChatStatePolling() {
 // ------------------------------------------------------------
 // Escuta invalidações do service worker
 // ------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'ZF_AUTH_INVALIDATED') {
     showBanner({
       title: 'Sessão expirada',
@@ -986,6 +986,51 @@ chrome.runtime.onMessage.addListener((message) => {
         el.style.minWidth = '';
       }
     }
+    return;
+  }
+
+  // Sprint 5 — handlers do manager (chrome-extension://) que precisam
+  // do contexto do WA Web. Reutilizam internamente switchToChat e
+  // callInjectedApi que já existem (sem reescrever sender.js).
+
+  if (message.type === 'ZF_OPEN_CHAT_FROM_MANAGER') {
+    // Abre o chat do JID na própria aba do WA. Manager já focou a tab
+    // antes via chrome.tabs.update — aqui só executa o switch.
+    (async () => {
+      try {
+        const target = { jid: message.jid, name: message.name };
+        const result = await switchToChat(target);
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+    })();
+    return true; // keep channel open pra sendResponse async
+  }
+
+  if (message.type === 'ZF_SEND_REPORT_FROM_MANAGER') {
+    // Envia texto pro PRÓPRIO JID do user (relatório do Sprint 5).
+    // Resolve o phone via getUserPhone() já existente, monta selfJid,
+    // e chama callInjectedApi('ZF_API_SEND_TEXT') — mesma rota dos
+    // envios de funil sem mexer no sender.js.
+    (async () => {
+      try {
+        const phone = await getUserPhone();
+        if (!phone) {
+          sendResponse({ ok: false, error: 'Não consegui detectar seu número no WA Web' });
+          return;
+        }
+        const selfJid = `${phone}@c.us`;
+        const result = await callInjectedApi('ZF_API_SEND_TEXT', {
+          jid: selfJid,
+          text: message.text,
+        });
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+    })();
+    return true;
   }
 });
 
