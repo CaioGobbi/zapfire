@@ -125,6 +125,10 @@ async function init() {
 
     console.log('[Zapfire] Ativo para', phone, '— plano', result.data.plan.name);
     mountSidebar();
+
+    // Sprint 5 ETAPA C — se o SW agendou um daily report enquanto o
+    // WA Web estava fechado, processa agora. Best-effort: erro só loga.
+    processPendingReportIfAny().catch(() => {});
   } catch (err) {
     console.error('[Zapfire] Falhou ao inicializar:', err);
   }
@@ -1016,23 +1020,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // e chama callInjectedApi('ZF_API_SEND_TEXT') — mesma rota dos
     // envios de funil sem mexer no sender.js.
     (async () => {
-      try {
-        const phone = await getUserPhone();
-        if (!phone) {
-          sendResponse({ ok: false, error: 'Não consegui detectar seu número no WA Web' });
-          return;
-        }
-        const selfJid = `${phone}@c.us`;
-        const result = await callInjectedApi('ZF_API_SEND_TEXT', {
-          jid: selfJid,
-          text: message.text,
-        });
-        sendResponse(result);
-      } catch (err) {
-        sendResponse({ ok: false, error: err.message || String(err) });
-      }
+      const result = await sendTextToSelf(message.text);
+      sendResponse(result);
     })();
     return true;
+  }
+
+  // Sprint 5 ETAPA C — daily report disparado pelo service-worker.
+  // Mesma rota do FROM_MANAGER mas com texto já gerado pelo SW.
+  if (message.type === 'ZF_DELIVER_REPORT_FROM_SW') {
+    (async () => {
+      const result = await sendTextToSelf(message.text);
+      sendResponse(result);
+    })();
+    return true;
+  }
+});
+
+// Sprint 5 ETAPA C — helper compartilhado: envia texto pro próprio
+// JID do user via WPP (módulos nativos do WA). Reutilizado pelos 3
+// handlers (manager, SW, sidebar/tracker no modo immediate).
+async function sendTextToSelf(text) {
+  try {
+    const phone = await getUserPhone();
+    if (!phone) {
+      return { ok: false, error: 'Não consegui detectar seu número no WA Web' };
+    }
+    const selfJid = `${phone}@c.us`;
+    return await callInjectedApi('ZF_API_SEND_TEXT', { jid: selfJid, text });
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+// Sprint 5 ETAPA C — Pending report: SW pode ter agendado um envio
+// quando o WA Web não estava aberto. Quando o user abre, processamos
+// e limpamos. Roda APÓS init() ter validado a chave e o WA Web pronto.
+async function processPendingReportIfAny() {
+  try {
+    const stored = await chrome.storage.local.get('zf_pending_report');
+    const pending = stored.zf_pending_report;
+    if (!pending || !pending.text) return;
+    // Limpa ANTES de tentar — se falhar, não fica em loop infinito.
+    // Acessivelmente: o próximo alarm vai gerar um novo texto fresh.
+    await chrome.storage.local.remove('zf_pending_report');
+    const result = await sendTextToSelf(pending.text);
+    if (!result.ok) {
+      console.warn('[Zapfire][content] pending report enviou mas falhou:', result.error);
+    } else {
+      console.log('[Zapfire][content] pending report entregue após reabertura');
+    }
+  } catch (err) {
+    console.warn('[Zapfire][content] processPendingReportIfAny falhou:', err);
+  }
+}
+
+// Sprint 5 — listener pra mensagens window (ex: tracker do iframe sidebar)
+window.addEventListener('message', (event) => {
+  if (event.source === window) return; // ignora self (vai pro injected)
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+
+  // Tracker no modo immediate manda texto pra ser enviado pro próprio user
+  if (msg.type === 'ZF_SEND_REPORT_TO_SELF' && typeof msg.text === 'string') {
+    sendTextToSelf(msg.text).catch((err) => {
+      console.warn('[Zapfire][content] ZF_SEND_REPORT_TO_SELF falhou:', err);
+    });
   }
 });
 

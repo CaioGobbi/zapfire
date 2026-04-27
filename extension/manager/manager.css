@@ -659,6 +659,102 @@ input, textarea { font-family: inherit; font-size: inherit; }
   letter-spacing: -0.01em;
 }
 
+/* ====== Sprint 5 ETAPA C — Modal "Configurar entrega automática" ====== */
+.delivery-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.delivery-mode-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.delivery-mode-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+.delivery-mode-row input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.delivery-mode-row:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.delivery-mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.delivery-mode-text strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.delivery-mode-text small {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.delivery-mode-extras {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.delivery-mode-extras input[type="time"] {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text);
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+}
+.delivery-mode-extras input[type="time"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.delivery-funnels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--bg);
+}
+.delivery-funnel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.delivery-funnel-row:hover { background: var(--bg-hover); }
+.delivery-funnel-row input[type="checkbox"] { cursor: pointer; }
+.delivery-funnels-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

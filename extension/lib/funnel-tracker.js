@@ -17,7 +17,8 @@
 // ============================================================
 
 import { runFunnel } from './funnel-engine.js';
-import { addRun, updateRun, getRun, listRuns } from './storage.js';
+import { addRun, updateRun, getRun, listRuns, getMeta } from './storage.js';
+import { generateImmediateText } from './report-template.js';
 
 // ------------------------------------------------------------
 // Mutex por runId — serializa reads-modify-writes no IndexedDB
@@ -116,6 +117,48 @@ export async function reconcileOrphanRuns() {
   }
 
   return { fixed, failed };
+}
+
+// ------------------------------------------------------------
+// Sprint 5 ETAPA C — modo "immediate" do daily report
+// ------------------------------------------------------------
+// Lê config de delivery do IndexedDB. Se mode='immediate' E o
+// funnelId está em funnelIds, gera texto curto via report-template
+// e manda postMessage pro content.js (window.parent — o tracker
+// vive dentro do iframe sidebar/manager) que envia pro próprio JID
+// via WPP.
+//
+// Roda fire-and-forget — nunca bloqueia o engine ou o caller. Erro
+// só vira console.warn.
+// ------------------------------------------------------------
+async function deliverImmediateIfApplicable(runId, funnelId) {
+  let config;
+  try {
+    config = await getMeta('reports.delivery', null);
+  } catch (_) {
+    return;
+  }
+  if (!config || config.mode !== 'immediate') return;
+  if (!Array.isArray(config.funnelIds) || !config.funnelIds.includes(funnelId)) return;
+
+  const run = await getRun(runId);
+  if (!run) return;
+
+  const text = generateImmediateText(run);
+
+  // window.parent é o content.js (o tracker rola dentro do iframe).
+  // Se rodou em contexto diferente (ex: manager standalone no futuro),
+  // window.parent === window e o postMessage vira no-op.
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        type: 'ZF_SEND_REPORT_TO_SELF',
+        text,
+      }, '*');
+    }
+  } catch (err) {
+    console.warn('[funnel-tracker] postMessage immediate falhou:', err);
+  }
 }
 
 // ------------------------------------------------------------
@@ -253,6 +296,16 @@ export function runFunnelWithTracking(funnel, target, opts = {}) {
       });
       // Limpa o slot do mapa pra não vazar memória ao longo do tempo
       clearChain(meta.runId);
+
+      // Sprint 5 ETAPA C — modo "immediate": se o user configurou
+      // entrega imediata e esse funil está incluído, dispara mensagem
+      // solo pro próprio WhatsApp. Best-effort, não bloqueia o caller.
+      if (meta.status === 'completed') {
+        deliverImmediateIfApplicable(meta.runId, funnel.id).catch((err) => {
+          console.warn('[funnel-tracker] immediate delivery falhou:', err);
+        });
+      }
+
       if (typeof userOnRunFinish === 'function') userOnRunFinish(meta);
     },
   };

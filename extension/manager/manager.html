@@ -363,6 +363,74 @@
     </footer>
   </dialog>
 
+  <!-- Sprint 5 ETAPA C — Modal "Configurar entrega automática" -->
+  <dialog class="modal" id="modal-delivery-config">
+    <form method="dialog" class="modal-form" id="form-delivery">
+      <header class="modal-header">
+        <h2>Entrega automática do relatório</h2>
+        <button type="button" class="modal-close" data-close="modal-delivery-config">×</button>
+      </header>
+
+      <div class="modal-body">
+        <div class="field">
+          <span>Modo</span>
+          <div class="delivery-modes">
+            <label class="delivery-mode-row">
+              <input type="radio" name="delivery-mode" value="disabled" />
+              <div class="delivery-mode-text">
+                <strong>Desativado</strong>
+                <small>Nenhum envio automático.</small>
+              </div>
+            </label>
+
+            <label class="delivery-mode-row">
+              <input type="radio" name="delivery-mode" value="fixed" />
+              <div class="delivery-mode-text">
+                <strong>Horário fixo</strong>
+                <small>1 mensagem por dia no horário escolhido.</small>
+                <div class="delivery-mode-extras">
+                  <input type="time" id="delivery-fixed-time" value="18:00" />
+                  <span style="font-size: 11px; color: var(--text-dim);">todos os dias</span>
+                </div>
+              </div>
+            </label>
+
+            <label class="delivery-mode-row">
+              <input type="radio" name="delivery-mode" value="immediate" />
+              <div class="delivery-mode-text">
+                <strong>Imediato</strong>
+                <small>Envia 1 mensagem solo por lead que completar um funil incluído.</small>
+              </div>
+            </label>
+
+            <label class="delivery-mode-row">
+              <input type="radio" name="delivery-mode" value="every4h" />
+              <div class="delivery-mode-text">
+                <strong>Resumo a cada 4 horas</strong>
+                <small>Mensagem com tudo que aconteceu nas últimas 4h.</small>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Funis incluídos</span>
+          <div id="delivery-funnels-list" class="delivery-funnels">
+            <!-- checkboxes dinâmicos -->
+          </div>
+          <small style="color: var(--text-dim); font-size: 11px; margin-top: 4px; display: block;">
+            Apenas funis com acompanhamento ativo aparecem aqui.
+          </small>
+        </div>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" data-close="modal-delivery-config">Cancelar</button>
+        <button type="submit" class="btn-primary">Salvar</button>
+      </footer>
+    </form>
+  </dialog>
+
   <!-- Sprint 5 — Modal de upgrade Pro -->
   <dialog class="modal" id="modal-upgrade-pro">
     <div class="modal-form">

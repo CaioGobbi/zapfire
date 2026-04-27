@@ -13,6 +13,7 @@
 import * as storage from '../lib/storage.js';
 import * as backup from '../lib/backup.js';
 import { reconcileOrphanRuns } from '../lib/funnel-tracker.js';
+import { generateReportText, groupRunsByFunnel } from '../lib/report-template.js';
 import { PANEL_URL } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -442,38 +443,8 @@ function formatRunTime(ms) {
   return `${hh}:${mm}`;
 }
 
-// Texto enviado pro próprio WhatsApp na ação "Enviar agora".
-// Limita a 10 leads por funil pra não estourar tamanho de mensagem.
-function generateReportText(runsByFunnel, periodLabel) {
-  const lines = [];
-  const todayStr = new Date().toLocaleDateString('pt-BR');
-  lines.push(`🎯 Relatório Zapfire — ${periodLabel} (${todayStr})`);
-  lines.push('');
-
-  let totalLeads = 0;
-  for (const group of runsByFunnel) {
-    if (!group.runs.length) continue;
-    totalLeads += group.runs.length;
-    lines.push(group.name.toUpperCase());
-    lines.push(`✅ ${group.runs.length} ${group.runs.length === 1 ? 'lead chegou' : 'leads chegaram'} ao final`);
-    const shown = group.runs.slice(0, 10);
-    for (const r of shown) {
-      const name = r.leadName || (r.leadJid?.split('@')[0]) || 'Sem nome';
-      lines.push(`• ${name} — ${formatRunTime(r.finishedAt || r.startedAt)}`);
-    }
-    if (group.runs.length > 10) {
-      lines.push(`• + ${group.runs.length - 10} outro(s)`);
-    }
-    lines.push('');
-  }
-
-  if (totalLeads === 0) {
-    lines.push('Nenhum lead completou funis monitorados nesse período.');
-  } else {
-    lines.push(`📊 Total: ${totalLeads} ${totalLeads === 1 ? 'lead completou' : 'leads completaram'} funis monitorados`);
-  }
-  return lines.join('\n');
-}
+// generateReportText e groupRunsByFunnel vêm de lib/report-template.js
+// (compartilhados com service-worker e funnel-tracker — Sprint 5 ETAPA C)
 
 // Manda mensagem pra primeira aba do WA Web.
 // Retorna { ok, error?, noTab? } pra UI mostrar mensagem certa.
@@ -614,7 +585,7 @@ async function renderReports(container) {
 
       <footer class="reports-actions">
         <button class="btn-primary" id="btn-send-now">Enviar relatório agora pro meu WhatsApp</button>
-        <button class="btn-ghost" id="btn-config-delivery" disabled title="Disponível em breve (Sprint 5 ETAPA C)">
+        <button class="btn-ghost" id="btn-config-delivery">
           Configurar entrega automática
         </button>
       </footer>
@@ -640,13 +611,22 @@ async function renderReports(container) {
     });
   });
 
+  // Click em "Configurar entrega automática"
+  $('btn-config-delivery').addEventListener('click', () => {
+    if (!state.planFeatures.dailyReport) {
+      openUpgradeProModal();
+      return;
+    }
+    openDeliveryConfigModal();
+  });
+
   // Click em "Enviar agora"
   $('btn-send-now').addEventListener('click', async () => {
     if (runs.length === 0) {
       toast('Nada pra enviar — nenhum lead completou nesse período', 'warning');
       return;
     }
-    const text = generateReportText(runsByFunnel, PERIOD_LABELS[state.reportsPeriod]);
+    const text = generateReportText(runsByFunnel, state.reportsPeriod);
     const btn = $('btn-send-now');
     btn.disabled = true;
     const oldLabel = btn.textContent;
@@ -707,6 +687,107 @@ function renderRunsGroup(group) {
       </div>
     </details>
   `;
+}
+
+// ============================================================
+// Sprint 5 ETAPA C — Modal "Configurar entrega automática"
+// ============================================================
+
+const DELIVERY_DEFAULT = {
+  mode: 'disabled',
+  fixedTime: '18:00',
+  funnelIds: [],
+  lastSentAt: null,
+};
+
+// Lê config salva em meta (canonical) — ou retorna defaults
+async function loadDeliveryConfig() {
+  const stored = await storage.getMeta('reports.delivery', null);
+  return { ...DELIVERY_DEFAULT, ...(stored || {}) };
+}
+
+async function openDeliveryConfigModal() {
+  const config = await loadDeliveryConfig();
+  const allFunnels = await storage.listFunnels();
+  const monitored = allFunnels.filter((f) => f.trackingEnabled);
+
+  // Marca o modo correto
+  document.querySelectorAll('input[name="delivery-mode"]').forEach((r) => {
+    r.checked = r.value === config.mode;
+  });
+  $('delivery-fixed-time').value = config.fixedTime || '18:00';
+
+  // Render dinâmico dos funis monitorados
+  const list = $('delivery-funnels-list');
+  if (monitored.length === 0) {
+    list.innerHTML = `
+      <div class="delivery-funnels-empty">
+        Nenhum funil com acompanhamento ativo. Volte na tab Funis,
+        edita um funil e marca "Acompanhar leads neste funil".
+      </div>
+    `;
+  } else {
+    list.innerHTML = monitored.map((f) => {
+      const checked = config.funnelIds.includes(f.id) ? 'checked' : '';
+      return `
+        <label class="delivery-funnel-row">
+          <input type="checkbox" value="${escapeHTML(f.id)}" ${checked} />
+          <span>${escapeHTML(f.trackingLabel || f.name)}</span>
+        </label>
+      `;
+    }).join('');
+  }
+
+  $('modal-delivery-config').showModal();
+}
+
+async function saveDeliveryConfigFromModal(event) {
+  event.preventDefault();
+  const mode = document.querySelector('input[name="delivery-mode"]:checked')?.value || 'disabled';
+  const fixedTime = $('delivery-fixed-time').value || '18:00';
+  const funnelIds = Array.from(
+    document.querySelectorAll('#delivery-funnels-list input[type="checkbox"]:checked')
+  ).map((cb) => cb.value);
+
+  // Validações de UX
+  if (mode !== 'disabled' && funnelIds.length === 0) {
+    toast('Selecione pelo menos 1 funil pra incluir', 'warning');
+    return;
+  }
+  if (mode === 'fixed' && !/^\d{2}:\d{2}$/.test(fixedTime)) {
+    toast('Horário inválido', 'warning');
+    return;
+  }
+
+  const previous = await loadDeliveryConfig();
+  const config = {
+    ...previous,
+    mode,
+    fixedTime,
+    funnelIds,
+  };
+
+  // Salva em meta (canonical) — fonte da verdade pro manager
+  await storage.setMeta('reports.delivery', config);
+
+  // Espelha em chrome.storage.local pro service-worker ler rápido
+  // sem precisar abrir IndexedDB. SW também usa pra reagendar alarms.
+  try {
+    await chrome.storage.local.set({ zf_reports_delivery: config });
+  } catch (_) {}
+
+  // Pede pro service-worker reagendar os alarms baseado na nova config
+  try {
+    await chrome.runtime.sendMessage({ type: 'ZF_RESCHEDULE_DELIVERY', config });
+  } catch (err) {
+    // SW pode estar dormindo — chrome.storage.onChanged também notifica,
+    // então não é crítico se essa chamada falhar
+    console.warn('[manager] ZF_RESCHEDULE_DELIVERY falhou:', err);
+  }
+
+  $('modal-delivery-config').close();
+  const labels = { disabled: 'desativada', fixed: `horário fixo às ${fixedTime}`, immediate: 'imediato', every4h: 'a cada 4h' };
+  toast(`Entrega automática salva: ${labels[mode] || mode}`, 'success');
 }
 
 function statCardHTML(colorKey, label, count, targetFilter) {
@@ -1848,6 +1929,8 @@ function init() {
 
   // Sprint 5 — Wiring da seção de monitoramento
   setupTrackingWiring();
+  // Sprint 5 ETAPA C — submit do form de entrega automática
+  $('form-delivery').addEventListener('submit', saveDeliveryConfigFromModal);
   // Carrega plan.features do chrome.storage e observa mudanças
   loadPlanFeatures();
 
