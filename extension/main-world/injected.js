@@ -339,6 +339,28 @@
           case 'ZF_API_GET_ACTIVE_CHAT':
             result = getActiveChatId();
             break;
+          // Pega o JID do próprio user (pra "enviar pra mim mesmo").
+          // Necessário porque contas em LID (@lid) não casam com o
+          // formato construído `${phone}@c.us` — chat não encontrado.
+          // WPP.whatsapp.UserPrefs.getMaybeMeUser() retorna o Wid
+          // canônico (LID ou PN, conforme a conta).
+          case 'ZF_API_GET_SELF_JID': {
+            try {
+              const prefs = window.WPP?.whatsapp?.UserPrefs;
+              const me = prefs?.getMaybeMeUser?.()
+                      || prefs?.getMaybeMePnUser?.()
+                      || prefs?.getMe?.();
+              const jid = me?._serialized || me?.id?._serialized || null;
+              if (jid) {
+                result = { ok: true, jid };
+              } else {
+                result = { ok: false, error: 'WPP UserPrefs não retornou self user' };
+              }
+            } catch (e) {
+              result = { ok: false, error: e.message || String(e) };
+            }
+            break;
+          }
           case 'ZF_API_SEND_TEXT':
             result = await sendText(msg.jid, msg.text, nativeModules);
             break;

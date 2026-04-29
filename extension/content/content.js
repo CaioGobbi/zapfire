@@ -1121,13 +1121,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Sprint 5 ETAPA C — helper compartilhado: envia texto pro próprio
 // JID do user via WPP (módulos nativos do WA). Reutilizado pelos 3
 // handlers (manager, SW, sidebar/tracker no modo immediate).
+//
+// Pós-Sprint 7: tenta pegar o JID real via WPP primeiro
+// (ZF_API_GET_SELF_JID → UserPrefs.getMaybeMeUser). Necessário pra
+// contas em LID (@lid suffix) — o construído `${phone}@c.us` não
+// casa com o chat e dá "chat não encontrado". Fallback pra @c.us
+// se WPP não responder (compat com contas legacy).
 async function sendTextToSelf(text) {
   try {
-    const phone = await getUserPhone();
-    if (!phone) {
-      return { ok: false, error: 'Não consegui detectar seu número no WA Web' };
+    let selfJid = null;
+
+    // 1) Tenta JID canônico do WPP (cobre LID e PN)
+    try {
+      const wppRes = await callInjectedApi('ZF_API_GET_SELF_JID', {}, 3000);
+      if (wppRes?.ok && wppRes.jid) selfJid = wppRes.jid;
+    } catch (_) {}
+
+    // 2) Fallback: constrói a partir do phone (compat contas non-LID)
+    if (!selfJid) {
+      const phone = await getUserPhone();
+      if (!phone) {
+        return { ok: false, error: 'Não consegui detectar seu número no WA Web' };
+      }
+      selfJid = `${phone}@c.us`;
     }
-    const selfJid = `${phone}@c.us`;
+
     return await callInjectedApi('ZF_API_SEND_TEXT', { jid: selfJid, text });
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
