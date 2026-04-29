@@ -657,6 +657,23 @@ async function handleIframeMessage(event) {
       return;
     }
 
+    // Sprint 5+ — sidebar pediu pra abrir o chat de um JID específico
+    // (botão "→ Para: X" clicável no card de Ativos). Reusa a mesma
+    // rota da tab Relatórios: WPP.chat.openChatBottom via injected.
+    case 'ZF_OPEN_CHAT_BY_JID': {
+      try {
+        if (!msg.jid) {
+          respond({ ok: false, error: 'JID ausente' });
+          return;
+        }
+        const result = await callInjectedApi('ZF_API_OPEN_CHAT', { jid: msg.jid });
+        respond(result);
+      } catch (err) {
+        respond({ ok: false, error: err.message || String(err) });
+      }
+      return;
+    }
+
     case 'ZF_SEND_TEXT': {
       try {
         let result;

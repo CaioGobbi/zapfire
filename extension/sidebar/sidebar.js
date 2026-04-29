@@ -471,9 +471,27 @@ function activityCard(run) {
   head.appendChild(cancelBtn);
   card.appendChild(head);
 
-  const target = document.createElement('div');
+  // Linha "→ Para: X" clicável — abre o chat do lead no WA Web
+  // via WPP.chat.openChatBottom (mesma rota do botão "Abrir conversa"
+  // da tab Relatórios no manager, Sprint 5)
+  const target = document.createElement('button');
+  target.type = 'button';
   target.className = 'activity-target';
   target.textContent = '→ Para: ' + (run.target?.name || '?');
+  target.title = 'Clique pra abrir a conversa';
+  target.onclick = (e) => {
+    e.stopPropagation();
+    const jid = run.target?.jid;
+    if (!jid) {
+      toast('Sem JID — não consegui abrir', 'warning');
+      return;
+    }
+    callParent('ZF_OPEN_CHAT_BY_JID', { jid, name: run.target?.name || '' })
+      .then((result) => {
+        if (!result?.ok) toast(result?.error || 'Falha ao abrir', 'error');
+      })
+      .catch(() => toast('Falha ao abrir conversa', 'error'));
+  };
   card.appendChild(target);
 
   const status = document.createElement('div');

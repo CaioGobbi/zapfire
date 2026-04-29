@@ -230,6 +230,22 @@ button { font-family: inherit; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Sprint 5+ — agora é botão clicável que abre a conversa no WA Web */
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: color 0.1s;
+  font-family: inherit;
+  border-radius: 4px;
+}
+.activity-target:hover {
+  color: var(--accent);
+}
+.activity-target:active {
+  transform: translateY(1px);
 }
 
 .activity-status {
