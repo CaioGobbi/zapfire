@@ -8,7 +8,8 @@
 // "Ir pro painel" em vez de "Entrar".
 //
 // Os links de checkout abrem em nova aba com noopener/noreferrer.
-// CHROME_WEB_STORE_URL ainda é placeholder — atualizar após aprovação.
+// Distribuição da extensão é via CWS unlisted — link só vai pra
+// quem assinou (no email pós-checkout). Nada de botão público aqui.
 // ============================================================
 
 import Link from 'next/link';
@@ -21,14 +22,12 @@ import {
   Workflow,
   Zap,
   ShieldCheck,
-  Chrome,
   Check,
   Sparkles,
 } from 'lucide-react';
 
 const KIRVANO_CHECKOUT_URL = 'https://pay.kirvano.com/10eb5393-19a0-4894-ab70-292b49b5c84c';
 const KIRVANO_CHECKOUT_ANNUAL_URL = 'https://pay.kirvano.com/7b80209b-9bb7-43f1-95a0-346a6fe35fd5';
-const CHROME_WEB_STORE_URL = '#TODO-CHROME-WEB-STORE';
 
 export default function LandingPage() {
   const { accessToken } = useAuthStore();
@@ -92,12 +91,6 @@ export default function LandingPage() {
             <a href={KIRVANO_CHECKOUT_URL} target="_blank" rel="noopener noreferrer">
               Começar agora — R$ 47/mês
               <ArrowRight className="w-4 h-4 ml-2" />
-            </a>
-          </Button>
-          <Button asChild size="lg" variant="outline" className="text-base">
-            <a href={CHROME_WEB_STORE_URL} target="_blank" rel="noopener noreferrer">
-              <Chrome className="w-4 h-4 mr-2" />
-              Instalar extensão
             </a>
           </Button>
         </div>
@@ -266,15 +259,6 @@ export default function LandingPage() {
         <div className="flex gap-5">
           <Link href="/privacy" className="hover:text-foreground">Privacidade</Link>
           <a href="mailto:contato@zapfire.com.br" className="hover:text-foreground">Contato</a>
-          <a
-            href={CHROME_WEB_STORE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-foreground inline-flex items-center gap-1"
-          >
-            <Chrome className="w-3.5 h-3.5" />
-            Instalar extensão
-          </a>
         </div>
       </footer>
     </main>
