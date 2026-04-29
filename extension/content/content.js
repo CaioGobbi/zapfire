@@ -793,6 +793,24 @@ async function handleIframeMessage(event) {
     case 'ZF_RUN_FUNNEL':
       respond({ ok: false, error: 'ZF_RUN_FUNNEL não usado (runs iniciam na sidebar)' });
       return;
+
+    // Presença "digitando" / "gravando áudio" pro contato durante
+    // execução de funil. Usado SÓ por funis (sidebar wraps no
+    // makeAnchoredSender). kind: 'typing' | 'recording' | 'paused'
+    case 'ZF_SET_PRESENCE': {
+      try {
+        if (!msg.jid) { respond({ ok: false, error: 'JID ausente' }); return; }
+        const result = await callInjectedApi('ZF_API_SET_PRESENCE', {
+          jid: msg.jid,
+          kind: msg.kind,
+          durationMs: msg.durationMs,
+        }, 5000);
+        respond(result);
+      } catch (err) {
+        respond({ ok: false, error: err.message || String(err) });
+      }
+      return;
+    }
   }
 }
 

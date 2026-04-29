@@ -645,15 +645,22 @@ function makeAnchoredSender(target, runId) {
       };
     }
 
-    // Texto
+    // Texto: presença "digitando..." pra parecer humano. Tempo
+    // proporcional ao tamanho (60ms/char, mín 1.2s, máx 6s)
     if (item.type === 'text') {
+      const txt = item.content || '';
+      const typingMs = Math.min(6000, Math.max(1200, txt.length * 60));
+      try {
+        await callParent('ZF_SET_PRESENCE', { jid: target.jid, kind: 'typing', durationMs: typingMs });
+      } catch (_) {}
+      await sleep(typingMs);
       return await callParent('ZF_SEND_TEXT', {
         jid: target.jid,
         text: item.content,
       });
     }
 
-    // Imagem / Vídeo / Arquivo
+    // Imagem / Vídeo / Arquivo — só envia, sem presença
     if (item.type === 'image' || item.type === 'video' || item.type === 'file') {
       if (!(item.content instanceof Blob)) {
         return { ok: false, error: 'mídia sem blob' };
@@ -666,11 +673,19 @@ function makeAnchoredSender(target, runId) {
       });
     }
 
-    // Áudio → PTT real
+    // Áudio → PTT real. Presença "gravando áudio..." durante a
+    // duração do próprio áudio (capada em 30s pra evitar travar
+    // o funil se o item tiver duration zerada/quebrada).
     if (item.type === 'audio') {
       if (!(item.content instanceof Blob)) {
         return { ok: false, error: 'áudio sem blob' };
       }
+      const durSec = Number(item.duration) > 0 ? Number(item.duration) : 0;
+      const recordingMs = Math.min(30000, Math.max(1500, Math.round(durSec * 1000)));
+      try {
+        await callParent('ZF_SET_PRESENCE', { jid: target.jid, kind: 'recording', durationMs: recordingMs });
+      } catch (_) {}
+      await sleep(recordingMs);
       return await callParent('ZF_SEND_AUDIO', {
         jid: target.jid,
         blob: item.content,
@@ -679,6 +694,10 @@ function makeAnchoredSender(target, runId) {
 
     return { ok: false, error: `tipo desconhecido: ${item.type}` };
   };
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // Envio bruto via content script — usado pelo sender ancorado e

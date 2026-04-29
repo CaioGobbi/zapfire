@@ -353,6 +353,35 @@
           // Sprint 5 — abre conversa pelo JID (usado pelo botão
           // "Abrir conversa" da tab Relatórios no manager). Usa
           // WPP.chat.openChatBottom que rola até a última mensagem.
+          // Presença "digitando..." / "gravando áudio..." pro contato
+          // ver durante o envio de funil. Texto = composing, áudio =
+          // recording. Duração em ms; WPP limpa sozinho ao fim.
+          case 'ZF_API_SET_PRESENCE':
+            try {
+              if (!window.WPP?.chat) {
+                result = { ok: false, error: 'WPP indisponível' };
+              } else {
+                const jid = msg.jid;
+                const dur = Math.max(500, Math.min(60000, msg.durationMs || 2000));
+                const kind = msg.kind; // 'typing' | 'recording' | 'paused'
+                if (kind === 'typing' && typeof window.WPP.chat.markIsComposing === 'function') {
+                  await window.WPP.chat.markIsComposing(jid, dur);
+                  result = { ok: true };
+                } else if (kind === 'recording' && typeof window.WPP.chat.markIsRecording === 'function') {
+                  await window.WPP.chat.markIsRecording(jid, dur);
+                  result = { ok: true };
+                } else if (kind === 'paused' && typeof window.WPP.chat.markIsPaused === 'function') {
+                  await window.WPP.chat.markIsPaused(jid);
+                  result = { ok: true };
+                } else {
+                  result = { ok: false, error: 'kind inválido ou função WPP ausente: ' + kind };
+                }
+              }
+            } catch (e) {
+              result = { ok: false, error: e.message || String(e) };
+            }
+            break;
+
           case 'ZF_API_OPEN_CHAT':
             try {
               if (!window.WPP?.chat) {

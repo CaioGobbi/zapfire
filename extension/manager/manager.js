@@ -79,7 +79,9 @@ function toast(message, type = 'info') {
   el.className = 'toast ' + type;
   el.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 2800);
+  // Toasts de sucesso ficam mais tempo — usuário precisa enxergar
+  const duration = type === 'success' ? 4200 : 2800;
+  toastTimer = setTimeout(() => { el.hidden = true; }, duration);
 }
 
 // ============================================================
@@ -1117,13 +1119,24 @@ async function saveItemFromModal(event) {
     draft.caption = $('item-caption').value.trim() || null;
   }
 
+  // Mensagens específicas pelo tipo — usuário leigo precisa de
+  // confirmação clara que "subiu" o arquivo dele.
+  const TYPE_LABELS = {
+    text: 'Mensagem',
+    audio: 'Áudio',
+    image: 'Imagem',
+    video: 'Vídeo',
+    file: 'Arquivo',
+  };
+  const label = TYPE_LABELS[draft.type] || 'Item';
+
   try {
     if (draft.id) {
       await storage.updateItem(draft.id, draft);
-      toast('Atualizado', 'success');
+      toast(`✓ ${label} atualizado com sucesso`, 'success');
     } else {
       await storage.addItem(draft);
-      toast('Criado', 'success');
+      toast(`✓ ${label} salvo com sucesso`, 'success');
     }
     $('modal-item').close();
     state.draftItem = null;
@@ -1342,7 +1355,24 @@ function setStepTab(tab) {
     }
   }
 
+  // Áudio: o tempo de envio É a duração do próprio áudio (presença
+  // "gravando..." durante o tempo dele). Esconde os inputs de delay.
+  toggleDelayUiForTab(tab);
+
   renderStepList();
+}
+
+function toggleDelayUiForTab(tab) {
+  const delayField = $('step-delay-field');
+  if (!delayField) return;
+  if (tab === 'audio') {
+    delayField.hidden = true;
+    // Zera os values pra evitar delay residual no save
+    const minEl = $('step-delay-min'); if (minEl) minEl.value = 0;
+    const secEl = $('step-delay-sec'); if (secEl) secEl.value = 0;
+  } else {
+    delayField.hidden = false;
+  }
 }
 
 // ------------------------------------------------------------
@@ -1578,7 +1608,7 @@ async function doExportBackup() {
     a.download = backup.suggestBackupFilename();
     a.click();
     URL.revokeObjectURL(url);
-    toast('Backup baixado', 'success');
+    toast('✓ Backup baixado com sucesso', 'success');
   } catch (err) {
     console.error('[backup:export]', err);
     toast('Erro no export: ' + err.message, 'error');
@@ -1682,7 +1712,7 @@ async function doImportBackup() {
       report.imported.docs;
 
     if (totalImported > 0) {
-      toast(`Importação concluída — ${totalImported} item(ns) adicionado(s)`, 'success');
+      toast(`✓ Backup importado — ${totalImported} item(ns) adicionado(s)`, 'success');
     } else {
       toast('Nenhum item novo importado (tudo pulado ou órfão)', 'warning');
     }

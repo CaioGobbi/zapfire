@@ -1261,17 +1261,20 @@ dialog::backdrop {
   bottom: 24px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px;
-  font-size: 13px;
+  border-left-width: 4px;
+  border-radius: 10px;
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--text);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.55);
   animation: toastIn 0.15s ease-out;
   z-index: 1000;
+  max-width: 480px;
 }
-.toast.success { border-color: var(--success); color: var(--success); }
-.toast.error { border-color: var(--accent); color: var(--accent); }
-.toast.warning { border-color: var(--warning); color: var(--warning); }
+.toast.success { border-color: var(--success); border-left-color: var(--success); color: var(--success); }
+.toast.error { border-color: var(--accent); border-left-color: var(--accent); color: var(--accent); }
+.toast.warning { border-color: var(--warning); border-left-color: var(--warning); color: var(--warning); }
 
 @keyframes toastIn {
   from { transform: translateY(8px); opacity: 0; }
