@@ -1,6 +1,6 @@
 {
   "name": "zapfire-extension",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Build tooling pra empacotar a extensão Zapfire. O código em si é vanilla JS (sem bundler em runtime). Esse package.json existe só pros devDependencies do script build.mjs (esbuild minify + archiver pra gerar o .zip da CWS).",
   "scripts": {

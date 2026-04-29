@@ -102,45 +102,45 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .filter-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   text-align: left;
   background: transparent;
   border: none;
   color: var(--text-dim);
-  padding: 11px 12px;
-  border-radius: 8px;
-  margin-bottom: 3px;
-  transition: background 0.1s, color 0.1s;
+  padding: 14px 16px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  transition: background 0.12s, color 0.12s;
   font-family: inherit;
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 16px;
+  font-weight: 600;
   cursor: pointer;
 }
-.filter-item:hover { background: var(--bg-elevated); color: var(--text); }
-.filter-item.active {
-  background: var(--accent-glow);
-  color: var(--accent);
-  font-weight: 600;
-}
+
+/* Texto e ícone usam a cor do tipo o tempo todo (estilo ZapVoice) */
+.filter-item--all    { color: var(--text); }
+.filter-item--funnel { color: var(--type-funnel); }
+.filter-item--text   { color: var(--type-text); }
+.filter-item--audio  { color: var(--type-audio); }
+.filter-item--media  { color: var(--type-media); }
+.filter-item--file   { color: var(--type-file); }
+
+.filter-item:hover { background: var(--bg-elevated); }
+
+/* Active: bg colorido pelo tipo, brilho mais forte */
+.filter-item.active { background: var(--bg-elevated); font-weight: 700; }
+.filter-item--funnel.active { background: var(--type-funnel-bg); }
+.filter-item--text.active   { background: var(--type-text-bg); }
+.filter-item--audio.active  { background: var(--type-audio-bg); }
+.filter-item--media.active  { background: var(--type-media-bg); }
+.filter-item--file.active   { background: var(--type-file-bg); }
 
 .filter-icon {
   flex-shrink: 0;
-  opacity: 0.85;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
-
-/* Ícones coloridos por tipo (scan rápido) */
-.filter-item--funnel .filter-icon { color: var(--type-funnel); }
-.filter-item--text   .filter-icon { color: var(--type-text); }
-.filter-item--audio  .filter-icon { color: var(--type-audio); }
-.filter-item--media  .filter-icon { color: var(--type-media); }
-.filter-item--file   .filter-icon { color: var(--type-file); }
-.filter-item--all    .filter-icon { color: var(--text-dim); }
-
-/* Quando ativo, ícone também fica no accent (prioridade ao estado) */
-.filter-item.active .filter-icon { color: var(--accent); opacity: 1; }
 
 /* ====== Main ====== */
 .main {

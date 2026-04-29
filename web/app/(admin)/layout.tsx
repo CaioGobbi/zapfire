@@ -72,7 +72,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen grid grid-cols-[240px_1fr]">
-      <aside className="border-r border-border bg-card/30 flex flex-col">
+      <aside className="sticky top-0 self-start h-screen overflow-y-auto border-r border-border bg-card/30 flex flex-col">
         <div className="p-5 border-b border-border flex items-center gap-3">
           <div className="w-8 h-8 rounded-md bg-zf-accent text-white flex items-center justify-center font-bold">
             Z
