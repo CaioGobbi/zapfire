@@ -1355,24 +1355,7 @@ function setStepTab(tab) {
     }
   }
 
-  // Áudio: o tempo de envio É a duração do próprio áudio (presença
-  // "gravando..." durante o tempo dele). Esconde os inputs de delay.
-  toggleDelayUiForTab(tab);
-
   renderStepList();
-}
-
-function toggleDelayUiForTab(tab) {
-  const delayField = $('step-delay-field');
-  if (!delayField) return;
-  if (tab === 'audio') {
-    delayField.hidden = true;
-    // Zera os values pra evitar delay residual no save
-    const minEl = $('step-delay-min'); if (minEl) minEl.value = 0;
-    const secEl = $('step-delay-sec'); if (secEl) secEl.value = 0;
-  } else {
-    delayField.hidden = false;
-  }
 }
 
 // ------------------------------------------------------------
@@ -1473,6 +1456,15 @@ function renderStepList() {
     `;
     row.addEventListener('click', () => {
       setStepItemValue(item.id);
+      // Áudio: pré-preenche o delay com a duração do próprio áudio
+      // (default sensato — o usuário pode sobrescrever se quiser).
+      if (item.type === 'audio' && Number(item.duration) > 0) {
+        const totalSec = Math.round(Number(item.duration));
+        const minEl = $('step-delay-min');
+        const secEl = $('step-delay-sec');
+        if (minEl) minEl.value = Math.floor(totalSec / 60);
+        if (secEl) secEl.value = totalSec % 60;
+      }
       closeStepPanel();
     });
     list.appendChild(row);

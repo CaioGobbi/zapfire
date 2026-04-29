@@ -105,14 +105,9 @@ export function runFunnel(funnelId, opts = {}) {
 
       const step = funnel.steps[i];
 
-      // 1) Delay ANTES desse step (incluindo o primeiro, se >0)
-      if (step.delayMs > 0) {
-        emit({ phase: 'waiting', current: i + 1, total, delayMs: step.delayMs });
-        await sleepCancellable(step.delayMs, controller);
-        if (controller.cancelled) break;
-      }
-
-      // 2) Busca item
+      // 1) Busca item ANTES do delay — quem ouve `phase:'waiting'` pode
+      //    querer reagir pelo tipo (ex: presença "digitando"/"gravando"
+      //    pro contato durante a espera). Ver sidebar onProgress.
       const item = await getItem(step.itemId);
       if (!item) {
         emit({
@@ -130,6 +125,13 @@ export function runFunnel(funnelId, opts = {}) {
         });
         // Não trava o funil — segue pro próximo
         continue;
+      }
+
+      // 2) Delay ANTES desse step (incluindo o primeiro, se >0)
+      if (step.delayMs > 0) {
+        emit({ phase: 'waiting', current: i + 1, total, delayMs: step.delayMs, item });
+        await sleepCancellable(step.delayMs, controller);
+        if (controller.cancelled) break;
       }
 
       // 3) Envia — serializado entre todos os funis ativos
