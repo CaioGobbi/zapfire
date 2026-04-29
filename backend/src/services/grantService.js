@@ -7,6 +7,7 @@
 // Funções públicas:
 //   - grantAccess({ ... })     → cria/anexa cortesia completa (user + sub + chave + email)
 //   - setUserPassword({ ... }) → admin define/redefine senha de um user
+//   - setUserEmail({ ... })    → admin troca email de um user (com unicidade)
 //   - grantNewKey({ ... })     → cria nova sub ACTIVE + nova chave (ou reusa) pra user existente
 //   - sendNewMagicLink({ ... })→ gera novo MAGIC_LINK e envia por email
 //
@@ -336,7 +337,46 @@ export async function setUserPassword({ userId, senha }) {
 }
 
 // ============================================================
-// 3. grantNewKey — nova subscription + nova chave pra user existente
+// 3. setUserEmail — admin troca email de um user
+// ============================================================
+//
+// Args: { userId, email }
+// Retorna: { ok: true, user, oldEmail } ou { ok: false, code }
+// Códigos: BAD_INPUT, USER_NOT_FOUND, EMAIL_IN_USE, SAME_EMAIL
+//
+// Revoga todas as sessões — força re-login com o email novo.
+// Mantém senha intacta (não força redefinição). emailVerified vira
+// true (admin tá garantindo manualmente).
+// ============================================================
+export async function setUserEmail({ userId, email }) {
+  if (!userId || !email) return { ok: false, code: 'BAD_INPUT' };
+  const normalized = String(email).trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    return { ok: false, code: 'BAD_INPUT' };
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return { ok: false, code: 'USER_NOT_FOUND' };
+  if (user.email === normalized) return { ok: false, code: 'SAME_EMAIL' };
+
+  const conflict = await prisma.user.findUnique({ where: { email: normalized } });
+  if (conflict) return { ok: false, code: 'EMAIL_IN_USE' };
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { email: normalized, emailVerified: true },
+  });
+
+  await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  return { ok: true, user: updated, oldEmail: user.email };
+}
+
+// ============================================================
+// 4. grantNewKey — nova subscription + nova chave pra user existente
 // ============================================================
 //
 // Diferente do grantAccess: SEMPRE cria nova chave (não reusa),

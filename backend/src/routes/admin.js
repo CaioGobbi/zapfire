@@ -22,6 +22,7 @@ import { resetKeyBind } from '../services/keyService.js';
 import {
   grantAccess,
   setUserPassword,
+  setUserEmail,
   grantNewKey,
   sendNewMagicLink,
 } from '../services/grantService.js';
@@ -766,6 +767,51 @@ export default async function adminRoutes(fastify) {
     return reply.code(200).send({
       ok: true,
       message: 'Senha definida e sessões anteriores invalidadas',
+    });
+  });
+
+  // ====================================================
+  // POST /users/:id/set-email — admin troca email do user
+  // ====================================================
+  fastify.post('/users/:id/set-email', ADMIN_GUARDS, async (request, reply) => {
+    const parsed = z
+      .object({ email: z.string().trim().email() })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: 'BAD_REQUEST', issues: parsed.error.issues });
+    }
+
+    const result = await setUserEmail({
+      userId: request.params.id,
+      email: parsed.data.email,
+    });
+    if (!result.ok) {
+      const status =
+        result.code === 'USER_NOT_FOUND' ? 404 :
+        result.code === 'EMAIL_IN_USE' ? 409 :
+        400;
+      return reply.code(status).send(result);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        userId: request.user.id,
+        action: 'admin.user.email_changed',
+        entityType: 'User',
+        entityId: result.user.id,
+        metadata: {
+          oldEmail: result.oldEmail,
+          newEmail: result.user.email,
+          revokedRefreshTokens: true,
+        },
+        ipAddress: getIp(request),
+      },
+    });
+
+    return reply.code(200).send({
+      ok: true,
+      message: 'Email alterado e sessões anteriores invalidadas',
+      newEmail: result.user.email,
     });
   });
 

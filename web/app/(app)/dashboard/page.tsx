@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Copy, Check, AlertTriangle, CreditCard, Key, Smartphone, CalendarClock, Chrome, ExternalLink } from 'lucide-react';
+import { Copy, Check, AlertTriangle, CreditCard, Key, Smartphone, CalendarClock, Chrome, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -190,6 +190,7 @@ function KeyCard({
   onCopy: (id: string, value: string) => void;
   copied: string | null;
 }) {
+  const [revealed, setRevealed] = useState(false);
   if (!k) {
     return (
       <Card>
@@ -211,6 +212,8 @@ function KeyCard({
     EXPIRED: 'Expirada',
   };
   const isCopied = copied === k.id;
+  // Quando escondida: 4 grupos de 8 bullets, mesmo layout do formatKey (32 chars)
+  const maskedKey = '•••••••• •••••••• •••••••• ••••••••';
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -224,8 +227,16 @@ function KeyCard({
       <CardContent className="space-y-3">
         <div className="flex items-center gap-2">
           <code className="flex-1 bg-secondary px-3 py-2 rounded-md font-mono text-sm text-zf-accent break-all select-all">
-            {formatKey(k.keyValue)}
+            {revealed ? formatKey(k.keyValue) : maskedKey}
           </code>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setRevealed((v) => !v)}
+            aria-label={revealed ? 'Esconder chave' : 'Mostrar chave'}
+          >
+            {revealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </Button>
           <Button size="icon" variant="ghost" onClick={() => onCopy(k.id, k.keyValue)} aria-label="Copiar">
             {isCopied ? <Check className="w-4 h-4 text-zf-success" /> : <Copy className="w-4 h-4" />}
           </Button>

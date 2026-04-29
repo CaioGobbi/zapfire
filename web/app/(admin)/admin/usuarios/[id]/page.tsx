@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -356,7 +357,7 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
             <KeyRound className="w-4 h-4 mr-2" /> Nova chave
           </Button>
           <Button variant="outline" size="sm" onClick={() => setSetPwOpen(true)}>
-            <Lock className="w-4 h-4 mr-2" /> Definir senha
+            <Lock className="w-4 h-4 mr-2" /> Credenciais
           </Button>
           <Button variant="outline" size="sm" onClick={sendMagicLink} disabled={magicLinkBusy}>
             <Mail className="w-4 h-4 mr-2" /> {magicLinkBusy ? 'Enviando…' : 'Enviar magic link'}
@@ -372,7 +373,7 @@ function UserHeader({ user, onAction }: { user: UserDetail; onAction: () => void
         user={user}
         onDone={() => { setPromoteOpen(false); onAction(); }}
       />
-      <SetPasswordDialog
+      <CredentialsDialog
         open={setPwOpen}
         onOpenChange={setSetPwOpen}
         userId={user.id}
@@ -885,57 +886,116 @@ function SetStatusDialog({ open, onOpenChange, subId, currentStatus, onDone }: a
   );
 }
 
-function SetPasswordDialog({ open, onOpenChange, userId, userEmail, onDone }: any) {
+function CredentialsDialog({ open, onOpenChange, userId, userEmail, onDone }: any) {
+  const [novoEmail, setNovoEmail] = useState('');
+  const [emailBusy, setEmailBusy] = useState(false);
   const [senha, setSenha] = useState('');
   const [confirma, setConfirma] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [pwBusy, setPwBusy] = useState(false);
 
-  function reset() { setSenha(''); setConfirma(''); setBusy(false); }
+  function reset() {
+    setNovoEmail(''); setEmailBusy(false);
+    setSenha(''); setConfirma(''); setPwBusy(false);
+  }
 
-  async function go() {
+  async function changeEmail() {
+    const trimmed = novoEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      toast.error('Email inválido'); return;
+    }
+    if (trimmed === userEmail.toLowerCase()) {
+      toast.error('Esse já é o email atual'); return;
+    }
+    setEmailBusy(true);
+    try {
+      await apiPost(`/admin/users/${userId}/set-email`, { email: trimmed });
+      toast.success('Email alterado — sessões anteriores invalidadas');
+      setNovoEmail('');
+      onDone();
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : null;
+      if (code === 'EMAIL_IN_USE') toast.error('Esse email já é usado por outro usuário');
+      else toast.error(err instanceof ApiError ? err.message : 'Falha');
+    } finally { setEmailBusy(false); }
+  }
+
+  async function changePassword() {
     if (senha.length < 8) { toast.error('Mínimo 8 caracteres'); return; }
     if (senha !== confirma) { toast.error('Senhas não batem'); return; }
-    setBusy(true);
+    setPwBusy(true);
     try {
       await apiPost(`/admin/users/${userId}/set-password`, { senha });
       toast.success('Senha definida — sessões anteriores invalidadas');
-      reset();
+      setSenha(''); setConfirma('');
       onDone();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Falha');
-    } finally { setBusy(false); }
+    } finally { setPwBusy(false); }
   }
+
+  const busy = emailBusy || pwBusy;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Definir senha do usuário</DialogTitle>
+          <DialogTitle>Editar credenciais</DialogTitle>
           <DialogDescription>
-            Define uma senha pra <strong>{userEmail}</strong>.
-            Todas as sessões ativas dele são invalidadas (precisa logar de novo).
-            Use quando o cliente perdeu a senha e prefere que você defina manualmente.
+            Operações independentes em <strong>{userEmail}</strong>.
+            Cada ação invalida todas as sessões ativas (cliente precisa logar de novo).
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="set-pw">Nova senha (mín. 8 chars)</Label>
-            <Input
-              id="set-pw" type="text" autoFocus autoComplete="new-password"
-              value={senha} onChange={(e) => setSenha(e.target.value)}
-            />
+
+        <div className="space-y-5">
+          {/* Email */}
+          <div className="space-y-2 pb-5 border-b border-border">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground font-semibold">
+              Trocar email
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="set-email">Novo email</Label>
+              <Input
+                id="set-email" type="email" autoComplete="off"
+                placeholder={userEmail}
+                value={novoEmail} onChange={(e) => setNovoEmail(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end pt-1">
+              <Button size="sm" onClick={changeEmail} disabled={busy || !novoEmail.trim()}>
+                {emailBusy ? 'Atualizando…' : 'Atualizar email'}
+              </Button>
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="set-pw-confirm">Confirmar</Label>
-            <Input
-              id="set-pw-confirm" type="text" autoComplete="new-password"
-              value={confirma} onChange={(e) => setConfirma(e.target.value)}
-            />
+
+          {/* Senha */}
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground font-semibold">
+              Definir senha
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="set-pw">Nova senha (mín. 8 chars)</Label>
+              <PasswordInput
+                id="set-pw" autoComplete="new-password"
+                value={senha} onChange={(e) => setSenha(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="set-pw-confirm">Confirmar</Label>
+              <PasswordInput
+                id="set-pw-confirm" autoComplete="new-password"
+                value={confirma} onChange={(e) => setConfirma(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end pt-1">
+              <Button size="sm" onClick={changePassword} disabled={busy || !senha || !confirma}>
+                {pwBusy ? 'Definindo…' : 'Definir senha'}
+              </Button>
+            </div>
           </div>
         </div>
+
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancelar</Button>
-          <Button onClick={go} disabled={busy}>{busy ? 'Definindo…' : 'Definir senha'}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Fechar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

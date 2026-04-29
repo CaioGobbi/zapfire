@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { ApiError } from '@/lib/api';
 import { consumeMagicLink, requestMagicLink } from '@/lib/auth';
@@ -93,9 +94,8 @@ function ConfigurarSenhaForm({ token }: { token: string }) {
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="space-y-2">
             <Label htmlFor="pwd">Nova senha</Label>
-            <Input
+            <PasswordInput
               id="pwd"
-              type="password"
               autoComplete="new-password"
               value={pwd}
               onChange={(e) => setPwd(e.target.value)}
@@ -105,9 +105,8 @@ function ConfigurarSenhaForm({ token }: { token: string }) {
           </div>
           <div className="space-y-2">
             <Label htmlFor="pwd2">Confirmar senha</Label>
-            <Input
+            <PasswordInput
               id="pwd2"
-              type="password"
               autoComplete="new-password"
               value={pwd2}
               onChange={(e) => setPwd2(e.target.value)}
