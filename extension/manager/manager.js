@@ -75,6 +75,12 @@ const TYPE_GENDER = {
 // Confirmação custom — substitui window.confirm nativo. Retorna
 // Promise<boolean>. Aceita texto multi-linha via opts.body (string,
 // linhas separadas por \n) ou opts.bodyHtml (controle total).
+//
+// Observação: escutamos `cancel` (ESC) em vez de `close` pra evitar
+// que o evento close (que pode disparar async em algumas versões
+// do Chrome) seja capturado pelo listener da próxima invocação
+// quando o mesmo dialog é reutilizado em sequência (caso "double
+// confirm" como o Apagar TUDO).
 function confirmModal(opts = {}) {
   const title = opts.title || 'Confirmar?';
   const confirmLabel = opts.confirmLabel || 'Confirmar';
@@ -110,17 +116,19 @@ function confirmModal(opts = {}) {
       settled = true;
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
-      d.removeEventListener('close', onClose);
+      d.removeEventListener('cancel', onEsc);
       try { d.close(); } catch (_) {}
       resolve(value);
     };
     const onOk = () => settle(true);
     const onCancel = () => settle(false);
-    const onClose = () => settle(false);
+    // ESC: previne o close default pra não disparar event close
+    // assíncrono e fechamos via settle. Comportamento idêntico do user.
+    const onEsc = (e) => { e.preventDefault(); settle(false); };
 
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
-    d.addEventListener('close', onClose);
+    d.addEventListener('cancel', onEsc);
 
     d.showModal();
   });
