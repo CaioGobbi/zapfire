@@ -1526,6 +1526,7 @@ dialog::backdrop {
   flex-direction: column;
   gap: 8px;
 }
+.tracking-body[hidden] { display: none !important; }
 .tracking-row {
   display: flex;
   align-items: flex-start;
