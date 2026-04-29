@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Copy, Check, AlertTriangle, CreditCard, Key, Smartphone, CalendarClock } from 'lucide-react';
+import { Copy, Check, AlertTriangle, CreditCard, Key, Smartphone, CalendarClock, Chrome, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,6 +13,9 @@ import { apiGet } from '@/lib/api';
 import { useAuthStore } from '@/lib/authStore';
 import { formatBRL, formatDate, formatKey, maskPhone, copyToClipboard } from '@/lib/format';
 import { cn } from '@/lib/utils';
+
+const CHROME_WEB_STORE_URL =
+  'https://chromewebstore.google.com/detail/zapfire-%E2%80%94-superpoderes-no/nnmdjgepomoiongkabkmjnpccbpkdnmb';
 
 // ============================================================
 // Types do que o backend devolve (espelha account.js)
@@ -228,8 +231,15 @@ function KeyCard({
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Cole no popup da extensão Chrome pra ativar.
+          Instale a extensão e cole a chave no popup pra ativar.
         </p>
+        <Button asChild variant="outline" className="w-full">
+          <a href={CHROME_WEB_STORE_URL} target="_blank" rel="noopener noreferrer">
+            <Chrome className="w-4 h-4 mr-2" />
+            Instalar extensão no Chrome
+            <ExternalLink className="w-3 h-3 ml-2 opacity-60" />
+          </a>
+        </Button>
       </CardContent>
     </Card>
   );
