@@ -460,6 +460,20 @@
     </div>
   </dialog>
 
+  <!-- Confirmação genérica (substitui window.confirm nativo) -->
+  <dialog class="modal" id="modal-confirm">
+    <div class="modal-form">
+      <header class="modal-header">
+        <h2 id="confirm-title">Confirmar?</h2>
+      </header>
+      <div class="modal-body" id="confirm-body"></div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" id="confirm-cancel">Cancelar</button>
+        <button type="button" class="btn-primary" id="confirm-ok">Confirmar</button>
+      </footer>
+    </div>
+  </dialog>
+
   <!-- Toast -->
   <div class="toast" id="toast" hidden></div>
 

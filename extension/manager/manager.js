@@ -72,6 +72,60 @@ const TYPE_GENDER = {
 // ============================================================
 // TOAST
 // ============================================================
+// Confirmação custom — substitui window.confirm nativo. Retorna
+// Promise<boolean>. Aceita texto multi-linha via opts.body (string,
+// linhas separadas por \n) ou opts.bodyHtml (controle total).
+function confirmModal(opts = {}) {
+  const title = opts.title || 'Confirmar?';
+  const confirmLabel = opts.confirmLabel || 'Confirmar';
+  const cancelLabel = opts.cancelLabel || 'Cancelar';
+
+  return new Promise((resolve) => {
+    const d = $('modal-confirm');
+    $('confirm-title').textContent = title;
+
+    const bodyEl = $('confirm-body');
+    bodyEl.innerHTML = '';
+    if (opts.bodyHtml) {
+      bodyEl.innerHTML = opts.bodyHtml;
+    } else if (opts.body) {
+      // Cada \n vira uma linha. textContent escapa HTML automático.
+      const lines = String(opts.body).split('\n');
+      for (const line of lines) {
+        const p = document.createElement('p');
+        p.textContent = line;
+        if (!line.trim()) p.style.height = '6px';
+        bodyEl.appendChild(p);
+      }
+    }
+
+    const okBtn = $('confirm-ok');
+    const cancelBtn = $('confirm-cancel');
+    okBtn.textContent = confirmLabel;
+    cancelBtn.textContent = cancelLabel;
+
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      d.removeEventListener('close', onClose);
+      try { d.close(); } catch (_) {}
+      resolve(value);
+    };
+    const onOk = () => settle(true);
+    const onCancel = () => settle(false);
+    const onClose = () => settle(false);
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    d.addEventListener('close', onClose);
+
+    d.showModal();
+  });
+}
+
 let toastTimer = null;
 function toast(message, type = 'info') {
   const el = $('toast');
@@ -1147,7 +1201,12 @@ async function saveItemFromModal(event) {
 }
 
 async function confirmDeleteItem(item) {
-  if (!confirm(`Excluir "${item.title}"?`)) return;
+  const ok = await confirmModal({
+    title: 'Excluir item?',
+    body: `"${item.title}" será removido. Essa ação não pode ser desfeita.`,
+    confirmLabel: 'Excluir',
+  });
+  if (!ok) return;
   await storage.deleteItem(item.id);
   toast('Excluído', 'success');
   renderList();
@@ -1539,7 +1598,12 @@ async function saveFunnelFromModal(event) {
 }
 
 async function confirmDeleteFunnel(funnel) {
-  if (!confirm(`Excluir o funil "${funnel.name}"?`)) return;
+  const ok = await confirmModal({
+    title: 'Excluir funil?',
+    body: `O funil "${funnel.name}" será removido. Os items usados nele continuam na biblioteca.`,
+    confirmLabel: 'Excluir',
+  });
+  if (!ok) return;
   await storage.deleteFunnel(funnel.id);
   toast('Funil excluído', 'success');
   renderList();
@@ -1762,17 +1826,26 @@ async function doClearAll() {
       return;
     }
 
-    const first = confirm(
-      `Apagar TUDO?\n\n` +
-      `Isso vai remover permanentemente:\n` +
-      `  • ${items.length} item(ns) (mensagens, áudios, mídias, arquivos)\n` +
-      `  • ${funnels.length} funil(is)\n\n` +
-      `Essa ação NÃO pode ser desfeita.\n\n` +
-      `Dica: exporte um backup antes, se quiser poder restaurar depois.`
-    );
+    const first = await confirmModal({
+      title: 'Apagar TUDO?',
+      bodyHtml: `
+        <p style="margin-bottom:10px;">Isso vai remover permanentemente:</p>
+        <ul style="margin:0 0 14px 18px;line-height:1.6;color:var(--text-dim);">
+          <li><strong>${items.length}</strong> item(ns) (mensagens, áudios, mídias, arquivos)</li>
+          <li><strong>${funnels.length}</strong> funil(is)</li>
+        </ul>
+        <p style="color:var(--accent);font-weight:600;margin-bottom:8px;">Essa ação NÃO pode ser desfeita.</p>
+        <p style="color:var(--text-dim);font-size:13px;">Dica: exporte um backup antes, se quiser poder restaurar depois.</p>
+      `,
+      confirmLabel: 'Apagar tudo',
+    });
     if (!first) return;
 
-    const second = confirm('Tem certeza absoluta? Última chance antes de apagar tudo.');
+    const second = await confirmModal({
+      title: 'Tem certeza absoluta?',
+      body: 'Última chance antes de apagar tudo.',
+      confirmLabel: 'Sim, apagar',
+    });
     if (!second) return;
 
     const result = await storage.clearAll();
