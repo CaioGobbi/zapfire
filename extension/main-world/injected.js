@@ -112,25 +112,44 @@
   }
 
   // ----------------------------------------------------------
-  // sendText — via módulos nativos (leve, já testado)
+  // sendText — via módulos nativos (leve, já testado).
+  // Fallback: se chat não existir (ex: enviar pra si mesmo pela
+  // 1ª vez, ou JID em LID que não bate em ChatCollection), cai pro
+  // WPP.chat.sendTextMessage que cria o chat se faltar.
   // ----------------------------------------------------------
   async function sendText(jid, text, nativeModules) {
     if (!jid || !text) throw new Error('jid e text são obrigatórios');
     if (typeof text !== 'string') throw new Error('text deve ser string');
 
     const chat = await getChatNative(jid, nativeModules);
-    if (!chat) throw new Error(`chat não encontrado pra ${jid}`);
 
-    let raw = nativeModules.WAWebSendTextMsgChatAction.sendTextMsgToChat(chat, text);
-
-    if (raw && typeof raw.then === 'function') raw = await raw;
-    if (Array.isArray(raw)) {
-      const settled = await Promise.all(
-        raw.map((p) => (p && typeof p.then === 'function' ? p : Promise.resolve(p)))
-      );
-      return { ok: true, localAck: settled[0], sendAck: settled[1] };
+    // Caminho rápido: chat já existe → usa módulo nativo
+    if (chat) {
+      let raw = nativeModules.WAWebSendTextMsgChatAction.sendTextMsgToChat(chat, text);
+      if (raw && typeof raw.then === 'function') raw = await raw;
+      if (Array.isArray(raw)) {
+        const settled = await Promise.all(
+          raw.map((p) => (p && typeof p.then === 'function' ? p : Promise.resolve(p)))
+        );
+        return { ok: true, localAck: settled[0], sendAck: settled[1], via: 'native' };
+      }
+      return { ok: true, result: raw, via: 'native' };
     }
-    return { ok: true, result: raw };
+
+    // Fallback: WPP.chat.sendTextMessage cria o chat se não existir
+    if (window.WPP?.chat?.sendTextMessage) {
+      try {
+        const result = await window.WPP.chat.sendTextMessage(normalizeJid(jid), text, {
+          createChat: true,
+          waitForAck: false,
+        });
+        return { ok: true, id: result?.id?._serialized, ack: result?.ack, via: 'wpp-sendTextMessage' };
+      } catch (e) {
+        throw new Error(`WPP.chat.sendTextMessage falhou pra ${jid}: ${e.message || e}`);
+      }
+    }
+
+    throw new Error(`chat não encontrado pra ${jid} (e WPP.chat.sendTextMessage indisponível)`);
   }
 
   // ----------------------------------------------------------
