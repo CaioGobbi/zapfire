@@ -1137,3 +1137,427 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
   init();
 });
+
+// ============================================================
+// Sprint 5+ — QuickSearch: busca rápida no input do WA via "/"
+// ============================================================
+//
+// User digita "/" no campo de mensagem do WA Web. Aparece overlay
+// flutuante com lista de items + funis filtrados pelo texto após
+// o "/". Setas navegam, Enter dispara, Esc fecha.
+//
+// Fluxo:
+//   1. Listener `input` global detecta typing no contenteditable
+//      do WA. Filtro: só dispara em divs dentro de #main footer.
+//   2. Se texto começa com "/", abre overlay e filtra `qsIndex`
+//      (cache local recebido da sidebar via ZF_QS_INDEX_PUSH).
+//   3. Setas/Enter/Esc capturados via keydown (preventDefault +
+//      stopPropagation pra não vazar pro WA).
+//   4. Selecionar item → manda ZF_QS_SEND_ITEM ou ZF_QS_RUN_FUNNEL
+//      pra sidebar (que tem acesso ao IndexedDB completo).
+//   5. Limpa input via execCommand selectAll+delete (deprecated mas
+//      funciona em contenteditable controlado por React).
+//
+// Cache de índice: warm na inicialização da sidebar; refresh on-demand
+// quando overlay abre (cobre items/funis adicionados no manager).
+// ============================================================
+
+const QS_TRIGGER_CHAR = '/';
+const QS_MAX_RESULTS = 8;
+
+// Cache local do índice (vem da sidebar via postMessage)
+let qsIndex = { items: [], funnels: [], lastSyncAt: 0 };
+
+// Estado do overlay
+let qsOverlay = null;
+let qsCurrentInput = null;
+let qsResults = [];
+let qsSelectedIndex = 0;
+let qsCurrentJid = null; // resolvido on-demand quando dispara
+
+// ------------------------------------------------------------
+// Listener pra receber sync da sidebar
+// ------------------------------------------------------------
+window.addEventListener('message', (event) => {
+  if (event.source === window) return;
+  const msg = event.data;
+  if (msg?.type === 'ZF_QS_INDEX_PUSH') {
+    qsIndex = {
+      items: Array.isArray(msg.items) ? msg.items : [],
+      funnels: Array.isArray(msg.funnels) ? msg.funnels : [],
+      lastSyncAt: Date.now(),
+    };
+  }
+});
+
+// Pede sync à sidebar (fresh) — usado quando overlay abre se o
+// cache está stale (>30s)
+function requestQsIndexFresh() {
+  if (!sidebarIframe || !sidebarIframe.contentWindow) return;
+  sidebarIframe.contentWindow.postMessage({ type: 'ZF_QS_INDEX_REQUEST' }, '*');
+}
+
+// ------------------------------------------------------------
+// Detectar input do WA (contenteditable dentro de #main footer)
+// ------------------------------------------------------------
+function isWaMessageInput(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.getAttribute('contenteditable') !== 'true') return false;
+  // O input fica dentro de #main footer. Search box top-left fica
+  // em outro lugar (#side header) — assim filtra automaticamente.
+  return !!el.closest('#main footer');
+}
+
+// ------------------------------------------------------------
+// Listeners globais (input + keydown). Capture phase pra interceptar
+// ANTES do React do WA processar (especialmente Enter/Tab/Esc).
+// ------------------------------------------------------------
+document.addEventListener('input', (e) => {
+  const input = e.target;
+  if (!isWaMessageInput(input)) return;
+
+  const text = (input.textContent || '').trimEnd();
+
+  if (text.startsWith(QS_TRIGGER_CHAR)) {
+    qsCurrentInput = input;
+    const query = text.slice(1).toLowerCase().trim();
+    // Refresh sob demanda se cache > 30s (evita listar items deletados
+    // ou perder novos adicionados no manager)
+    if (Date.now() - qsIndex.lastSyncAt > 30_000) {
+      requestQsIndexFresh();
+    }
+    qsResults = qsFilter(query);
+    qsSelectedIndex = 0;
+    qsRenderOverlay();
+  } else {
+    qsCloseOverlay();
+  }
+}, true);
+
+document.addEventListener('keydown', (e) => {
+  if (!qsOverlay || qsOverlay.style.display === 'none') return;
+  if (!qsCurrentInput) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    qsCloseOverlay();
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    e.stopPropagation();
+    if (qsResults.length === 0) return;
+    qsSelectedIndex = (qsSelectedIndex + 1) % qsResults.length;
+    qsUpdateSelection();
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    e.stopPropagation();
+    if (qsResults.length === 0) return;
+    qsSelectedIndex = (qsSelectedIndex - 1 + qsResults.length) % qsResults.length;
+    qsUpdateSelection();
+    return;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    if (qsResults[qsSelectedIndex]) {
+      e.preventDefault();
+      e.stopPropagation();
+      qsSelectResult(qsResults[qsSelectedIndex]);
+    }
+  }
+}, true);
+
+// ------------------------------------------------------------
+// Filtragem do índice por substring case-insensitive
+// ------------------------------------------------------------
+function qsFilter(query) {
+  // Funis primeiro (são "ações compostas" — costuma ser o que o user
+  // quer mais rápido), depois items
+  const all = [
+    ...qsIndex.funnels.map((f) => ({
+      kind: 'funnel', id: f.id, name: f.name,
+      meta: `${f.stepsCount} step${f.stepsCount === 1 ? '' : 's'}`,
+    })),
+    ...qsIndex.items.map((i) => ({
+      kind: 'item', id: i.id, name: i.title || '(sem título)', type: i.type,
+      meta: i.type,
+    })),
+  ];
+  const q = (query || '').trim();
+  const filtered = q
+    ? all.filter((x) => x.name.toLowerCase().includes(q))
+    : all;
+  return filtered.slice(0, QS_MAX_RESULTS);
+}
+
+// ------------------------------------------------------------
+// Overlay
+// ------------------------------------------------------------
+function qsEnsureOverlay() {
+  if (qsOverlay) return qsOverlay;
+  // CSS injetado uma vez
+  const style = document.createElement('style');
+  style.textContent = `
+    #zf-qs-overlay {
+      position: fixed;
+      z-index: 2147483647;
+      background: #141414;
+      border: 1px solid #383838;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 420px;
+      min-width: 280px;
+      max-height: 320px;
+      overflow-y: auto;
+      padding: 6px 0;
+      color: #f5f5f5;
+    }
+    #zf-qs-overlay .zf-qs-header {
+      padding: 6px 14px 8px;
+      font-size: 10px;
+      color: #a3a3a3;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #262626;
+    }
+    #zf-qs-overlay .zf-qs-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      cursor: pointer;
+      transition: background 0.05s;
+    }
+    #zf-qs-overlay .zf-qs-row.selected,
+    #zf-qs-overlay .zf-qs-row:hover {
+      background: #1c1c1c;
+    }
+    #zf-qs-overlay .zf-qs-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      color: white;
+    }
+    #zf-qs-overlay .zf-qs-icon--funnel { background: rgba(255,59,48,0.2); color: #ff3b30; }
+    #zf-qs-overlay .zf-qs-icon--text   { background: rgba(56,189,248,0.2); color: #38bdf8; }
+    #zf-qs-overlay .zf-qs-icon--audio  { background: rgba(168,85,247,0.2); color: #a855f7; }
+    #zf-qs-overlay .zf-qs-icon--image,
+    #zf-qs-overlay .zf-qs-icon--video  { background: rgba(245,158,11,0.2); color: #f59e0b; }
+    #zf-qs-overlay .zf-qs-icon--file   { background: rgba(236,72,153,0.2); color: #ec4899; }
+    #zf-qs-overlay .zf-qs-name {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #zf-qs-overlay .zf-qs-meta {
+      font-size: 10px;
+      color: #a3a3a3;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+    }
+    #zf-qs-overlay .zf-qs-empty {
+      padding: 14px;
+      text-align: center;
+      color: #a3a3a3;
+      font-size: 12px;
+    }
+    #zf-qs-overlay .zf-qs-hint {
+      padding: 6px 14px;
+      font-size: 10px;
+      color: #737373;
+      border-top: 1px solid #262626;
+      display: flex;
+      gap: 12px;
+    }
+    #zf-qs-overlay .zf-qs-hint kbd {
+      background: #262626;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 9px;
+      color: #f5f5f5;
+    }
+  `;
+  document.head.appendChild(style);
+
+  qsOverlay = document.createElement('div');
+  qsOverlay.id = 'zf-qs-overlay';
+  document.body.appendChild(qsOverlay);
+  return qsOverlay;
+}
+
+const QS_TYPE_LABEL = {
+  funnel: 'Funil', text: 'Mensagem', audio: 'Áudio',
+  image: 'Imagem', video: 'Vídeo', file: 'Arquivo',
+};
+const QS_ICON_LETTER = {
+  funnel: 'F', text: 'T', audio: 'A',
+  image: 'I', video: 'V', file: 'D',
+};
+
+function qsRenderOverlay() {
+  qsEnsureOverlay();
+  if (!qsCurrentInput) return;
+
+  // Posiciona acima do input
+  const rect = qsCurrentInput.getBoundingClientRect();
+  qsOverlay.style.left = rect.left + 'px';
+  qsOverlay.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  qsOverlay.style.width = Math.min(rect.width, 420) + 'px';
+
+  let html = `<div class="zf-qs-header">Buscar e enviar — Zapfire</div>`;
+
+  if (qsResults.length === 0) {
+    html += `<div class="zf-qs-empty">Nenhum item encontrado. Esc pra fechar.</div>`;
+  } else {
+    html += qsResults.map((r, i) => {
+      const iconKind = r.kind === 'funnel' ? 'funnel' : r.type;
+      const iconLetter = QS_ICON_LETTER[iconKind] || '?';
+      const metaLabel = r.kind === 'funnel'
+        ? r.meta
+        : (QS_TYPE_LABEL[r.type] || r.type);
+      return `
+        <div class="zf-qs-row ${i === qsSelectedIndex ? 'selected' : ''}" data-index="${i}">
+          <span class="zf-qs-icon zf-qs-icon--${iconKind}">${iconLetter}</span>
+          <span class="zf-qs-name">${qsEscapeHtml(r.name)}</span>
+          <span class="zf-qs-meta">${qsEscapeHtml(metaLabel)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  html += `
+    <div class="zf-qs-hint">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navegar</span>
+      <span><kbd>Enter</kbd> enviar</span>
+      <span><kbd>Esc</kbd> fechar</span>
+    </div>
+  `;
+
+  qsOverlay.innerHTML = html;
+  qsOverlay.style.display = 'block';
+
+  // Click handlers
+  qsOverlay.querySelectorAll('.zf-qs-row').forEach((row) => {
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // evita perder foco do input do WA
+      const idx = parseInt(row.dataset.index, 10);
+      if (qsResults[idx]) qsSelectResult(qsResults[idx]);
+    });
+  });
+}
+
+function qsUpdateSelection() {
+  if (!qsOverlay) return;
+  qsOverlay.querySelectorAll('.zf-qs-row').forEach((row, i) => {
+    row.classList.toggle('selected', i === qsSelectedIndex);
+    if (i === qsSelectedIndex) row.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function qsCloseOverlay() {
+  if (qsOverlay) qsOverlay.style.display = 'none';
+  qsCurrentInput = null;
+  qsResults = [];
+  qsSelectedIndex = 0;
+}
+
+// ------------------------------------------------------------
+// Selecionar resultado: limpa input + dispara envio via sidebar
+// ------------------------------------------------------------
+async function qsSelectResult(result) {
+  if (!qsCurrentInput) return;
+  const input = qsCurrentInput;
+
+  // Pega JID do chat ANTES de fechar/limpar
+  let jid = null;
+  try {
+    const active = await callInjectedApi('ZF_API_GET_ACTIVE_CHAT', {});
+    jid = active?.id?._serialized || active?.jid || null;
+  } catch (_) {}
+
+  // Fallback: tenta capturar pelo DOM
+  if (!jid) {
+    const idObj = getChatIdentifier();
+    jid = idObj?.jid || null;
+  }
+
+  if (!jid) {
+    showQsToast('Não consegui detectar a conversa aberta', 'error');
+    return;
+  }
+
+  // Limpa input ANTES de mandar (UX melhor — feedback imediato)
+  qsClearInput(input);
+  qsCloseOverlay();
+
+  // Despacha pra sidebar — ela tem acesso aos blobs do IndexedDB
+  if (!sidebarIframe || !sidebarIframe.contentWindow) {
+    showQsToast('Sidebar não disponível', 'error');
+    return;
+  }
+  if (result.kind === 'funnel') {
+    sidebarIframe.contentWindow.postMessage({
+      type: 'ZF_QS_RUN_FUNNEL', funnelId: result.id,
+    }, '*');
+  } else {
+    sidebarIframe.contentWindow.postMessage({
+      type: 'ZF_QS_SEND_ITEM', itemId: result.id, jid,
+    }, '*');
+  }
+}
+
+// Limpa contenteditable controlado por React via execCommand
+// (deprecated mas ainda funciona pq é o que o WA usa internamente
+// e os hooks de React escutam beforeinput/input que o execCommand
+// dispara naturalmente).
+function qsClearInput(input) {
+  try {
+    input.focus();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('delete', false);
+  } catch (err) {
+    console.warn('[Zapfire][QS] clearInput falhou:', err);
+  }
+}
+
+// Toast visível só no contexto do content script (reusa o estilo
+// do showBanner mas mais discreto, sem header)
+function showQsToast(msg, type = 'info') {
+  const colors = { info: '#1a1a1a', error: '#dc2626', success: '#16a34a' };
+  const t = document.createElement('div');
+  t.style.cssText = `
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    z-index: 2147483647; background: ${colors[type] || colors.info};
+    color: white; padding: 10px 18px; border-radius: 6px; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  `;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+function qsEscapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+

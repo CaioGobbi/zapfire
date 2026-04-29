@@ -27,6 +27,10 @@ import {
   getMeta,
   setMeta,
   incrementItemUses,
+  // Sprint 5+ — QuickSearch handlers precisam pegar item/funnel
+  // completos (com blob) pra despachar envio
+  getItem,
+  getFunnel,
 } from '../lib/storage.js';
 import { runFunnel } from '../lib/funnel-engine.js';
 // Sprint 5 — wrapper que registra runs em funnel_runs quando o funil
@@ -924,6 +928,129 @@ async function init() {
   updateActivityBadge();
 
   callParent('ZF_QUERY_CHAT_STATE', {}).catch(() => {});
+
+  // Sprint 5+ — QuickSearch: warm cache do índice no content.js
+  // pra busca rápida por "/" no input do WA Web ser instantânea.
+  setupQuickSearchSync();
+}
+
+// ============================================================
+// Sprint 5+ — QuickSearch sync (content.js → sidebar)
+// ============================================================
+// Content.js (em web.whatsapp.com) NÃO tem acesso ao IndexedDB
+// da extensão (origin diferente). A sidebar (iframe chrome-ext://)
+// tem. Então sidebar é a fonte do índice e content.js consome via
+// postMessage. Cache no content + refresh on-demand quando overlay
+// abre garante latência ~10ms.
+async function broadcastQuickSearchIndex() {
+  try {
+    const items = await listItems();
+    const funnels = await listFunnels();
+    // Apenas metadata (id, title/name, type) — sem blobs nem campos
+    // pesados. Suficiente pra render do overlay.
+    const itemsMeta = items.map((i) => ({
+      id: i.id, title: i.title, type: i.type,
+    }));
+    const funnelsMeta = funnels.map((f) => ({
+      id: f.id, name: f.name, stepsCount: (f.steps || []).length,
+    }));
+    window.parent.postMessage({
+      type: 'ZF_QS_INDEX_PUSH',
+      items: itemsMeta,
+      funnels: funnelsMeta,
+    }, '*');
+  } catch (err) {
+    console.warn('[Zapfire][sidebar] broadcastQuickSearchIndex falhou:', err);
+  }
+}
+
+function setupQuickSearchSync() {
+  // Sync inicial pra warm cache
+  broadcastQuickSearchIndex();
+  // Listener pra requests on-demand do content.js (quando overlay abre)
+  window.addEventListener('message', (event) => {
+    if (event.source === window) return;
+    const msg = event.data;
+    if (msg?.type === 'ZF_QS_INDEX_REQUEST') {
+      broadcastQuickSearchIndex();
+    }
+    // Despacho de envio vindo do content (overlay → sidebar → injected)
+    if (msg?.type === 'ZF_QS_SEND_ITEM') {
+      handleQuickSearchSendItem(msg.itemId, msg.jid).catch((err) => {
+        console.warn('[Zapfire][sidebar] QS send item falhou:', err);
+      });
+    }
+    if (msg?.type === 'ZF_QS_RUN_FUNNEL') {
+      handleQuickSearchRunFunnel(msg.funnelId).catch((err) => {
+        console.warn('[Zapfire][sidebar] QS run funnel falhou:', err);
+      });
+    }
+  });
+}
+
+// QS pediu envio direto de item (texto/áudio/mídia/arquivo) — pega
+// o item completo do storage (com blob) e despacha via callParent
+// usando os mesmos types do envio avulso (mesma rota dos chips da
+// quickbar, mesma rota do anchored sender dos funis).
+async function handleQuickSearchSendItem(itemId, jid) {
+  if (!canSend(state.license)) {
+    globalToast('Assinatura indisponível — renove pra enviar', 'error');
+    return;
+  }
+  const item = await getItem(itemId);
+  if (!item) {
+    globalToast('Item não encontrado', 'error');
+    return;
+  }
+  if (!jid) {
+    globalToast('Não consegui detectar a conversa aberta', 'error');
+    return;
+  }
+
+  let result;
+  if (item.type === 'text') {
+    result = await callParent('ZF_SEND_TEXT', { jid, text: item.content });
+  } else if (item.type === 'image' || item.type === 'video' || item.type === 'file') {
+    if (!(item.content instanceof Blob)) {
+      result = { ok: false, error: 'mídia sem blob' };
+    } else {
+      result = await callParent('ZF_SEND_MEDIA', {
+        jid, blob: item.content,
+        caption: item.caption || '',
+        mediaType: item.type,
+      });
+    }
+  } else if (item.type === 'audio') {
+    if (!(item.content instanceof Blob)) {
+      result = { ok: false, error: 'áudio sem blob' };
+    } else {
+      result = await callParent('ZF_SEND_AUDIO', { jid, blob: item.content });
+    }
+  } else {
+    result = { ok: false, error: `tipo desconhecido: ${item.type}` };
+  }
+
+  if (result?.ok) {
+    await incrementItemUses(item.id);
+    globalToast(`Enviado: ${item.title}`, 'success');
+  } else {
+    globalToast(`Falha: ${result?.error || 'erro desconhecido'}`, 'error');
+  }
+}
+
+// QS pediu pra rodar funil — reusa o pipeline existente da sidebar
+// (handleRunFunnel) porque ele cuida de tracking, indicador, etc.
+// Diferença: precisamos pular o getActiveChat (já temos o chat aberto
+// quando o user digitou no input).
+async function handleQuickSearchRunFunnel(funnelId) {
+  const funnel = await getFunnel(funnelId);
+  if (!funnel) {
+    globalToast('Funil não encontrado', 'error');
+    return;
+  }
+  // handleRunFunnel já valida chat aberto e dispara — vai funcionar
+  // porque o user acabou de digitar no input do chat ativo.
+  handleRunFunnel(funnel);
 }
 
 init();
