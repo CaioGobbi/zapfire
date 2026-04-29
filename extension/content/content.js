@@ -360,6 +360,54 @@ function ensureIndicatorStyle() {
   indicatorStyleInjected = true;
 }
 
+// ResizeObserver no #main (instanciado uma vez, reusado) +
+// listeners de resize/scroll do window. Garante que o indicador
+// fica colado ao topo-esquerdo do #main mesmo quando o WA muda
+// layout (resize da janela, side-panel abrindo, modo compacto).
+let mainResizeObserver = null;
+let indicatorReposListenersAttached = false;
+
+function attachIndicatorRepositionListeners() {
+  if (indicatorReposListenersAttached) return;
+  indicatorReposListenersAttached = true;
+
+  // Window resize cobre redimensionamento do browser
+  window.addEventListener('resize', repositionIndicator);
+  // Scroll do window é raro mas cobre edge cases
+  window.addEventListener('scroll', repositionIndicator, true);
+}
+
+function ensureMainResizeObserver(main) {
+  if (!main || mainResizeObserver) return;
+  // ResizeObserver dispara quando #main muda de tamanho — cobre
+  // sidebar do WA aparecendo/sumindo, drawer de info abrindo, etc
+  mainResizeObserver = new ResizeObserver(() => {
+    repositionIndicator();
+  });
+  try { mainResizeObserver.observe(main); } catch (_) {}
+}
+
+// Reposiciona o indicador colado no topo-esquerdo do #main.
+// Inclui boundary check: se #main não existe ou está fora do viewport
+// (raro mas possível), esconde em vez de deixar coordenada inválida.
+function repositionIndicator() {
+  if (!indicatorEl) return;
+  const main = document.querySelector('#main');
+  if (!main) {
+    indicatorEl.style.display = 'none';
+    return;
+  }
+  const rect = main.getBoundingClientRect();
+  // Sanity: #main precisa ter dimensões válidas
+  if (rect.width <= 0 || rect.height <= 0) {
+    indicatorEl.style.display = 'none';
+    return;
+  }
+  indicatorEl.style.display = '';
+  indicatorEl.style.top = `${rect.top + 70}px`;
+  indicatorEl.style.left = `${rect.left + 18}px`;
+}
+
 async function updateFunnelIndicator() {
   // Captura JID do chat atual via WPP (fonte de verdade — mesma
   // usada pela sidebar). Fallback pro DOM se WPP falhar.
@@ -400,13 +448,11 @@ async function updateFunnelIndicator() {
     document.body.appendChild(indicatorEl);
   }
 
-  // Posiciona sobre o topo-esquerdo do #main (área da conversa)
+  // Liga os listeners de reposicionamento (idempotentes — chama 1x só)
+  attachIndicatorRepositionListeners();
   const main = document.querySelector('#main');
-  if (main) {
-    const rect = main.getBoundingClientRect();
-    indicatorEl.style.top = `${rect.top + 70}px`;
-    indicatorEl.style.left = `${rect.left + 18}px`;
-  }
+  ensureMainResizeObserver(main);
+  repositionIndicator();
 }
 
 // ------------------------------------------------------------
