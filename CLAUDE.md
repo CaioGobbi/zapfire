@@ -23,7 +23,10 @@
 - **Backend**: `https://zapfire-production.up.railway.app` (Railway + Postgres managed)
 - **Painel**: `https://zapfire-five.vercel.app` (Vercel + Next.js 14)
 - **Privacy policy**: `https://zapfire-five.vercel.app/privacy` (pública, usada pra submissão CWS)
+- **CWS listing**: `https://chromewebstore.google.com/detail/zapfire-%E2%80%94-superpoderes-no/nnmdjgepomoiongkabkmjnpccbpkdnmb` — distribuído como **unlisted** (sem busca pública); link só vai pelo email pós-checkout
 - **Domínio real `zapfire.com.br`**: ainda não comprado — Sprint 8 faz a migração
+
+**Versão atual da extensão**: `0.2.0` (zip pronto pra publicar em `extension/dist/zapfire-extension-0.2.0.zip`).
 
 ## Stack
 
@@ -441,6 +444,46 @@ Pequenas mudanças commitadas após o Sprint 5 fechar, antes de submeter pra Chr
 - Antes do move, build do zip dava 2.7 MB (empacotando os PNGs irrelevantes pra runtime). Após move: voltou pra ~436 KB
 - `extension/assets/` mantém só os 3 ícones reais da extensão (icon-16/48/128.png)
 
+### Pós-Sprint 7 — pré-CWS submission (UX polish + bug fixes)
+
+Bloco focado em deixar o produto pronto pra primeira submissão na Chrome Web Store. Versão atual: **0.2.0**. Build prod em `extension/dist/zapfire-extension-0.2.0.zip` (~438 KB).
+
+**Distribuição CWS (commits `a4b425f` + `b694e06`):**
+- Estratégia: extensão entra como **unlisted** no CWS — não aparece em busca, link só vai pelo email pós-checkout. Protege contra "pirataria" sem precisar de domínio Workspace
+- Removidos os 2 botões "Instalar extensão" da landing pública (`web/app/page.tsx` hero + footer) + constante `CHROME_WEB_STORE_URL` placeholder + import `Chrome` do lucide
+- `web/app/(app)/dashboard/page.tsx` KeyCard agora tem botão "Instalar extensão no Chrome" (variant="outline", w-full) apontando pra URL canônica `https://chromewebstore.google.com/detail/zapfire-%E2%80%94-superpoderes-no/nnmdjgepomoiongkabkmjnpccbpkdnmb` (sem `?authuser=…&hl=…` que são query params do user atual). Fluxo natural: vê chave → instala extensão → cola chave
+- `extension/popup/popup.html` "Assine aqui" agora aponta pra `https://zapfire-five.vercel.app` (era `zapfire.com.br` que ainda não existe)
+
+**Painel — sidebars sticky + chave mascarada + admin set-email (commits `c5e72fc` + `6e6ea84`):**
+- Layouts `(app)` e `(admin)`: aside agora é `sticky top-0 self-start h-screen overflow-y-auto`. Continua visível durante scroll de conteúdo longo (dashboard, tabelas de histórico, lista de usuários). Antes esticava com a página
+- Dashboard `KeyCard` mostra a chave mascarada por default (`•••••••• •••••••• •••••••• ••••••••` — 4 grupos de 8 bullets, mesmo layout do `formatKey`). Botão de olho (Eye/EyeOff) revela. Copiar funciona escondida ou revelada (sempre copia o valor real)
+- `web/components/ui/password-input.tsx` (NOVO) — wrapper compartilhado que adiciona toggle Eye/EyeOff a todo `<Input type="password">`. Usado em login, primeiro-acesso, e dialog de credenciais do admin
+- Admin user detail: botão "Definir senha" virou "Credenciais" e abre dialog único com **2 seções independentes** (trocar email + definir senha), cada uma com seu próprio botão de aplicar — UX cleaner que ter 2 botões no header
+- Backend: novo `setUserEmail({ userId, email })` em [grantService.js](backend/src/services/grantService.js) (validação de formato + unicidade + diferença do atual; revoga refresh tokens; emailVerified=true) + endpoint `POST /api/v1/admin/users/:id/set-email` com auditLog `admin.user.email_changed` (códigos: `EMAIL_IN_USE` → 409, `USER_NOT_FOUND` → 404, `BAD_INPUT` → 400, `SAME_EMAIL` → 400)
+
+**Manager — sidebar grande + step tabs com ícones + presença em funis (commits `83273a4` + `c5e72fc` + `ab7b5a8` + `fb58c55` + `a0d9e97`):**
+- Sidebar do manager: `--sidebar-w 220 → 260px`, items grandes (padding 14×16, gap 14, radius 10), font 16/600, ícones 22×22 via CSS (sobrepõe os 16×16 inline). Texto e ícone usam a cor do tipo o tempo todo (estilo ZapVoice — Funis vermelho, Mensagens azul, Áudios roxo, Imagens/Vídeos amber, Arquivos rosa). Active state usa bg colorido pelo tipo (`--type-XXX-bg`) + weight 700, no lugar do `--accent-glow` genérico que pintava tudo de vermelho
+- Step tabs no editor de funil (modal "Editar item"): bolinhas coloridas (`menu-dot`) viraram **ícones SVG do tipo** (mesmo set da sidebar) na cor do tipo. Active state também ganhou bg/borda na cor do tipo
+- Áudio em funil — delay editável + presença "gravando" durante waiting:
+  - Step modal: ao selecionar item de áudio no picker, delay min/seg pré-preenchem com a duração do próprio áudio (default sensato; usuário pode sobrescrever)
+  - Engine ([funnel-engine.js](extension/lib/funnel-engine.js)): item agora é looked-up ANTES do delay, e `phase: 'waiting'` carrega `{ item }` no payload (antes só tinha `delayMs`). Permite que quem escuta `onProgress` reaja ao tipo
+  - Sidebar `onRunProgress` no `phase: 'waiting'`: dispara `ZF_SET_PRESENCE` com `kind=typing` pra texto, `kind=recording` pra áudio. Duração da presença = `delayMs` do step (mín 1.5s, máx 60s). Mídia/arquivo: nada
+  - injected.js novo case `ZF_API_SET_PRESENCE` mapeia pra `WPP.chat.markIsComposing` / `markIsRecording` / `markIsPaused`
+  - content.js nova bridge `ZF_SET_PRESENCE` (sidebar → injected via `callInjectedApi`)
+  - **Standalone (cards/quickbar/quicksearch) NÃO usa presença** — comportamento exclusivo de funis, conforme pedido
+  - Resultado: contato vê "digitando…" / "gravando áudio…" durante a espera do step inteiro; mensagem chega exatamente quando a presença expira — sem dobra de espera
+
+**Manager — toasts + confirmações + spinner (commits `fb58c55` + `26939b5` + `b98bf02`):**
+- Toast: bumpado pra 15px/600, padding 14×20, borda esquerda 4px na cor, duração 4.2s pra success (era 2.8s pra todos). Usuário leigo precisa enxergar
+- Save toasts type-specific: `"✓ Áudio salvo com sucesso"`, `"✓ Vídeo salvo com sucesso"`, etc — `TYPE_LABELS` map em `saveItemFromModal`. Backup também ganhou `"✓ Backup baixado/importado"`
+- Toast no **top-layer via popover API**: `showModal()` cria stacking context separado e qualquer `z-index` do DOM normal fica atrás. Solução: `<div popover="manual">` + `showPopover()`/`hidePopover()`. CSS sobrepõe o UA stylesheet do popover (`inset:0; margin:auto`) com `top:auto; left:auto; margin:0` pra manter posição bottom-right
+- `window.confirm()` virou modal custom: novo `<dialog id="modal-confirm">` + helper `confirmModal({ title, body | bodyHtml, confirmLabel?, cancelLabel? })` que retorna `Promise<boolean>`. `body` aceita texto multi-linha (cada `\n` vira `<p>`); `bodyHtml` dá controle total (usado no "Apagar TUDO" que tem lista). Substitui as 4 chamadas existentes (deletar item, deletar funil, "Apagar TUDO" + "Tem certeza absoluta?")
+- Spinner durante conversão de áudio: `dropzone` agora tem 2 estados internos (`#dropzone-default` + `#dropzone-loading`). Quando chega um MP3/WAV pra converter pra OGG, mostra spinner roxo + "Convertendo áudio para o formato do WhatsApp…", `pointer-events: none` no dropzone, save disabled. Toast final `"✓ Áudio convertido — XX KB"` confirma. Antes ficava 5-10s sem feedback visual
+
+**Bug fixes (commits `1d0865c` + `391acd9`):**
+- Colapsável "Monitoramento" no editor de funil não escondia o body: `display: flex` na `.tracking-body` ganhava do `[hidden]` (mesma armadilha do `.field[hidden]` já documentada). Fix em 1 linha: `.tracking-body[hidden] { display: none !important }`
+- "Apagar tudo" não disparava: race no event `close` do `<dialog>` reutilizado em sequência (double-confirm). Em alguns Chromes o close event do primeiro `.close()` disparava async e era capturado pelo listener da segunda invocação — resolvia `false` antes do user clicar, abortando o fluxo. Fix: trocado event `close` por `cancel`. `cancel` só dispara em ESC do user, não em `.close()` programático — não vaza entre invocações
+
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
 ### Sprint 1-2
@@ -526,6 +569,19 @@ Pequenas mudanças commitadas após o Sprint 5 fechar, antes de submeter pra Chr
 - **`WPP.chat.openChatBottom(jid)` é a única forma confiável de navegar entre chats programaticamente** — clicks sintéticos no DOM são bloqueados pelo `isTrusted` check do WA. switchToChat legado só DETECTA chat aberto, não navega
 - **cws-assets/ na raiz, não em extension/** — assets pra publicação na CWS (screenshots 1280x800, promo tiles, drafts) ficam fora do zip da extensão. Build empacota só `extension/assets/` que tem 3 ícones reais (icon-16/48/128.png). Empacotar PNGs grandes no zip dispara comentário do reviewer ("por que essa extensão tem 2.4 MB de PNGs em assets/?") e infla download dos clientes 6×
 
+### Pós-Sprint 7 (pré-CWS submission)
+- **CWS unlisted, não pública** — extensão fica unlisted no Developer Dashboard (não aparece em busca, sem ranking, link só funciona pra quem tem). Link vai pelo email pós-checkout do Resend. É proteção anti-pirataria de 1ª linha (sem precisar Google Workspace pra modo privado), e mantém a mesma URL chrome-extension:// id estável que dá pra distribuir sempre que precisar
+- **Toast no top-layer via popover API**, não z-index — `<dialog>` aberto via `showModal()` cria stacking context separado em top-layer; nenhum z-index do DOM normal vence. `<div popover="manual">` + `showPopover()`/`hidePopover()` coloca o elemento no mesmo top-layer dos dialogs abertos. CSS sobrepõe o UA stylesheet (`inset:0; margin:auto`) com `top:auto; left:auto; margin:0` pra manter posição bottom-right. Chrome 114+ (manifest aponta 120+, safe)
+- **Confirmações custom em vez de window.confirm** — alertbox nativa do browser não cabe no tema dark/cypherpunk e fica tosca em monitor grande. Helper `confirmModal({ title, body | bodyHtml, confirmLabel? })` retorna `Promise<boolean>`. **Cuidado**: usar event `cancel` (não `close`) pra capturar ESC, porque close pode disparar async em alguns Chromes e vazar pra próxima invocação quando o mesmo dialog é reutilizado em sequência (ex: double-confirm do "Apagar TUDO" — bug observado em prod)
+- **`.tracking-body[hidden]` precisa `display: none !important`** — `display: flex` ganha do default `[hidden]`. Mesma armadilha do `.field[hidden]` documentada antes. Sempre que adicionar `display: flex/grid/inline-block` num elemento que tem `hidden` toggle, declare também a regra `[hidden] { display: none !important }`
+- **Engine emite `phase: 'waiting'` com `{ item }`** — lookup do item agora acontece ANTES do delay (em vez de depois), pra que listeners de onProgress reajam ao tipo durante a espera (ex: presença "digitando"/"gravando" pro contato). Sender stays type-agnostic
+- **Presença pro contato é exclusiva de funis, não envios standalone** — decisão UX: cards/quickbar/quicksearch são "envio rápido" e o usuário espera resposta imediata; mostrar "digitando..." atrasaria. Funil é simulação humana, presença faz sentido. Implementação: hook no `onRunProgress` da sidebar, dispara `ZF_SET_PRESENCE` → injected → `WPP.chat.markIsComposing/markIsRecording`. Duração da presença = `delayMs` do step (mín 1.5s, máx 60s)
+- **Áudio em funil: delay defaulta pra duração do áudio mas é editável** — quando user seleciona um item de áudio no step picker, min/seg pré-preenchem com `Math.round(item.duration)`. Não escondemos o input (UX flexibility) — só damos um default sensato. A presença "gravando..." durante o delay = duração do áudio dá feeling natural de "tá gravando agora"
+- **Sidebars do painel viraram `sticky top-0 self-start h-screen`** — antes esticavam com a página em rotas com conteúdo longo (histórico, lista admin de usuários). Sticky + self-start permite que o aside não estique no grid e fique fixo no topo durante scroll
+- **Chave mascarada por default no painel + eye toggle** — UX defensiva contra screenshare/screenshot acidental do dashboard. Mostra `•••••••• •••••••• •••••••• ••••••••` (4 grupos de 8 bullets, mesmo layout do `formatKey`). Botão de copy continua funcionando escondida — copia o valor real
+- **`PasswordInput` reutilizável com Eye/EyeOff toggle** — mesmo componente compartilhado em login, primeiro-acesso, dialog admin. Mantém `<Input>` shadcn como fonte da verdade pro estilo, só envelopa com state interno `show` que alterna entre `type="password"` e `type="text"`. Padding-right 10 pra acomodar o botão absoluto
+- **Admin: dialog "Credenciais" combinando email + senha** — em vez de 2 botões separados ("Mudar email" e "Definir senha"), 1 botão "Credenciais" abre dialog com 2 seções independentes, cada uma com seu próprio botão de aplicar. UX mais limpa e o user-detail header já tem 4 botões (Nova chave / Credenciais / Magic link / Mudar role) — adicionar 1 a mais pioraria
+
 ## Próximos Sprints
 
 - **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`. Definir preço final do `pro_v1` + criar oferta na Kirvano + adicionar offer_id em `kirvanoParser.js` (PRO_OFFER_IDS)
@@ -534,7 +590,7 @@ Pequenas mudanças commitadas após o Sprint 5 fechar, antes de submeter pra Chr
 ### Débito técnico conhecido
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
 - Fallback DOM em `lib/sender.js` ainda existe — pode ser removido quando envio via API for 100% estável
-- Conversão OGG bloqueia UI do manager durante o upload — poderia ser async/progress
+- Conversão OGG bloqueia UI do manager durante o upload — desde 0.2.0 mostra spinner roxo no dropzone e desabilita save, mas o thread principal ainda trava (opus-media-recorder roda playback realtime). Async/progress real seria via worker dedicado
 - `tags` e `folder` ainda no schema do IndexedDB mas sem UI — decidir entre remover do storage ou reintroduzir UI
 - Rate limit por email no /login é in-memory Map — vira Redis quando for multi-server
 - Kirvano `offer_id` → plano ainda é fallback por `charge_frequency`. Sprint 8: preencher `ANNUAL_OFFER_IDS` / `MONTHLY_OFFER_IDS` em `lib/kirvanoParser.js` com os IDs reais
@@ -599,7 +655,8 @@ zapfire/
 │       │   └── account.js                ← 11 endpoints do painel
 │       └── services/
 │           ├── keyService.js             ← validateKey (com grace), resetBind (self-service), resetKeyBind (admin)
-│           └── kirvanoService.js         ← handlers por evento (SALE_*, SUBSCRIPTION_*, etc)
+│           ├── kirvanoService.js         ← handlers por evento (SALE_*, SUBSCRIPTION_*, etc)
+│           └── grantService.js           ← grantAccess, setUserPassword, setUserEmail (pós-Sprint 7), grantNewKey, sendNewMagicLink
 │
 ├── web/                                  ← Next.js 14 App Router (painel do assinante)
 │   ├── .env.example                      ← NEXT_PUBLIC_API_URL
@@ -618,14 +675,14 @@ zapfire/
 │   │   │   ├── privacy/page.tsx          ← Sprint 7 — LGPD policy pública (URL p/ CWS)
 │   │   │   └── primeiro-acesso/page.tsx  ← 2 modos (com/sem ?token=) + Suspense
 │   │   └── (app)/                        ← requer JWT (gate via bootstrapSession)
-│   │       ├── layout.tsx                ← sidebar 220px + main
-│   │       ├── dashboard/page.tsx        ← chave + subscription + bind + banners
+│   │       ├── layout.tsx                ← sidebar 220px STICKY + main
+│   │       ├── dashboard/page.tsx        ← chave mascarada+eye toggle + botão "Instalar extensão" + sub + bind
 │   │       ├── assinatura/page.tsx       ← plano + último pagamento + link Kirvano
 │   │       ├── dispositivos/page.tsx     ← devices + modal reset-bind
 │   │       └── historico/page.tsx        ← tabs Pagamentos + Validações
 │   ├── components/
 │   │   ├── AuthProvider.tsx              ← chama bootstrapSession no mount
-│   │   └── ui/                           ← shadcn: button, card, input, dialog, badge, table, tabs, skeleton, sonner, …
+│   │   └── ui/                           ← shadcn: button, card, input, dialog, badge, table, tabs, skeleton, sonner, password-input (pós-Sprint 7)…
 │   └── lib/
 │       ├── api.ts                        ← fetch wrapper + auto-refresh em 401
 │       ├── authStore.ts                  ← zustand (access em memória!)
@@ -640,7 +697,7 @@ zapfire/
     ├── package.json                      ← Sprint 7 — devDeps (esbuild + archiver)
     ├── dist/                             ← Sprint 7 — saída do build (gitignored)
     │   ├── extension/                    ← pasta pronta pra load unpacked ou CWS
-    │   └── zapfire-extension-<v>.zip     ← upload direto no CWS (~415 KB)
+    │   └── zapfire-extension-<v>.zip     ← upload direto no CWS (~438 KB; v0.2.0 atual)
     ├── assets/ (ícones 16/48/128)
     ├── background/
     │   └── service-worker.js             ← auth, heartbeat, license state; importa API_BASE
