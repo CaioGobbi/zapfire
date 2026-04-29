@@ -1482,11 +1482,13 @@ async function qsSelectResult(result) {
   if (!qsCurrentInput) return;
   const input = qsCurrentInput;
 
-  // Pega JID do chat ANTES de fechar/limpar
+  // Pega JID do chat ANTES de fechar/limpar.
+  // ZF_API_GET_ACTIVE_CHAT retorna { ok, target: { jid, name, phone } }
+  // (mesmo shape consumido pela sidebar).
   let jid = null;
   try {
     const active = await callInjectedApi('ZF_API_GET_ACTIVE_CHAT', {});
-    jid = active?.id?._serialized || active?.jid || null;
+    jid = active?.target?.jid || null;
   } catch (_) {}
 
   // Fallback: tenta capturar pelo DOM
