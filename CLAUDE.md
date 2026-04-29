@@ -409,6 +409,38 @@ Feature do plano **Pro** que rastreia leads que chegaram ao final de funis monit
 
 **Retention 90d:** `deleteRunsOlderThan(now - 90 dias)` no startup do manager (background, não bloqueia init)
 
+### Pós-Sprint 5 — melhorias contínuas (pré-CWS submission)
+
+Pequenas mudanças commitadas após o Sprint 5 fechar, antes de submeter pra Chrome Web Store. Não viraram sprint próprio mas vale documentar:
+
+**QuickSearch — busca rápida no input do WA via `/`** (commits `07c67d5` + `20f2b2a`):
+- User digita `/` no campo de mensagem do WA Web → overlay flutuante aparece com lista de items + funis filtrados pelo texto após o `/`. ↑↓ navega, Enter dispara, Esc fecha. Após enviar, o `/comando` é apagado do input via `execCommand('selectAll' + 'delete')`
+- Estilo Slack/Notion/Discord — atalho natural sem precisar abrir sidebar/quickbar/manager
+- **Arquitetura cross-context**: content.js (origin web.whatsapp.com) NÃO tem acesso ao IndexedDB da extensão (origin chrome-extension://). Solução: índice (id + name + type, sem blobs) é "pushado" pela sidebar via `postMessage('ZF_QS_INDEX_PUSH')` ao content.js, que mantém cache local. Refresh on-demand quando overlay abre se cache > 30s
+- Funis disparam via `ZF_QS_RUN_FUNNEL` → sidebar.handleRunFunnel (mesma rota dos cards de funil). Items via `ZF_QS_SEND_ITEM` → sidebar pega blob completo + dispatch via callParent (texto, áudio, mídia, file)
+- Listener input + keydown em capture phase no document, filtrado por `isWaMessageInput` (só dispara dentro de `#main footer` — exclui search box de contatos)
+- Tudo inline em content.js (~350 linhas) pra não precisar adicionar content_script novo no manifest
+
+**Card de Ativos clicável** (commit `42ac7bb`):
+- Na tab "Ativos" da sidebar, durante execução de funil, a linha "→ Para: lead" virou button clicável
+- Click abre o chat do lead no WA Web via mesma rota da tab Reports (`WPP.chat.openChatBottom` no injected.js)
+- Útil pra acompanhar conversa em tempo real sem buscar manualmente
+- Novo case `ZF_OPEN_CHAT_BY_JID` no listener window de content.js
+
+**Indicador de funil trava no #main em qualquer layout** (commit `7137d24`):
+- Bug observado: a "bolinha Z" às vezes vazava pra fora do área de chat (ficava na lista de conversas ou fora do viewport) quando user redimensionava janela ou WA reorganizava layout
+- Causa: posição (top/left fixed) só recalculada quando chat MUDAVA. Mudanças de layout sem mudança de chat (resize, drawer abrindo, painel info do contato) não atualizavam
+- Fix: 3 mecanismos idempotentes — `ResizeObserver` no `#main`, `window.resize`, `window.scroll` (capture). Todos chamam `repositionIndicator()` que pega rect atual. Boundary check: se `#main` some, esconde via `display: none` em vez de coordenada lixo
+
+**ZF_API_OPEN_CHAT no injected.js** (parte do commit `d84e6ec` da ETAPA B do Sprint 5, mas vale notar):
+- Caso novo no injected: `WPP.chat.openChatBottom(jid)` → permite navegação ativa entre chats (pra "Abrir conversa" da tab Reports e do card Ativos)
+- O `switchToChat` legado (content.js) só DETECTA chat aberto — WA Web bloqueia clicks sintéticos no DOM, então a única rota viável de navegação programática é a API interna do WA via WPP
+
+**cws-assets/ separado de extension/assets/** (commit `c416cc9`):
+- 9 PNGs (screenshots, promo tiles, designs do CWS) que estavam em `extension/assets/` foram movidos pra `cws-assets/` na raiz
+- Antes do move, build do zip dava 2.7 MB (empacotando os PNGs irrelevantes pra runtime). Após move: voltou pra ~436 KB
+- `extension/assets/` mantém só os 3 ícones reais da extensão (icon-16/48/128.png)
+
 ## Decisões Técnicas Já Tomadas (não refazer sem motivo)
 
 ### Sprint 1-2
@@ -485,6 +517,15 @@ Feature do plano **Pro** que rastreia leads que chegaram ao final de funis monit
 - **Heartbeat NÃO atualiza `plan.features`** — só `/auth/validate` faz. Promover Pro requer F5/relogin pra UI refletir. Aceitável pq é evento raro
 - **`maxMonitoredFunnels: 10` documentado mas não validado client-side** — fica pra quando alguém atingir o limite
 
+### Pós-Sprint 5 (melhorias contínuas)
+- **QuickSearch usa cache no content via postMessage da sidebar** — content.js (origin web.whatsapp.com) não tem acesso ao IndexedDB da extensão. Sidebar broadcasta índice (id+name+type, sem blobs) no init via `ZF_QS_INDEX_PUSH`. Refresh on-demand quando overlay abre se cache > 30s. Items com blob são pegos pela sidebar quando despacha envio (`ZF_QS_SEND_ITEM`)
+- **QuickSearch listener em capture phase** — `document.addEventListener('input'/'keydown', ..., true)`. Captura ANTES do React do WA processar, especialmente importante pra Enter/Tab/Esc não vazarem pro WA enviar mensagem indesejada
+- **QuickSearch trigger só em input INTEIRO começando com `/`** — não dispara se "/" tá no meio de texto. Permite mandar literal "/algo" se user fechar overlay com Esc + Enter
+- **`execCommand('selectAll' + 'delete')` pra limpar input do WA** — deprecated mas funciona em contenteditable controlado por React. É o que o WA usa internamente. Se virar problema (anos), troca pra `Selection.deleteFromDocument()`
+- **Indicador de funil ativo: ResizeObserver no #main + window resize/scroll** — cobre mudanças de layout sem mudança de chat (drawer info contato, side-panel busca, modo compacto/expandido). 3 listeners idempotentes, todos chamam `repositionIndicator()`
+- **`WPP.chat.openChatBottom(jid)` é a única forma confiável de navegar entre chats programaticamente** — clicks sintéticos no DOM são bloqueados pelo `isTrusted` check do WA. switchToChat legado só DETECTA chat aberto, não navega
+- **cws-assets/ na raiz, não em extension/** — assets pra publicação na CWS (screenshots 1280x800, promo tiles, drafts) ficam fora do zip da extensão. Build empacota só `extension/assets/` que tem 3 ícones reais (icon-16/48/128.png). Empacotar PNGs grandes no zip dispara comentário do reviewer ("por que essa extensão tem 2.4 MB de PNGs em assets/?") e infla download dos clientes 6×
+
 ## Próximos Sprints
 
 - **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`. Definir preço final do `pro_v1` + criar oferta na Kirvano + adicionar offer_id em `kirvanoParser.js` (PRO_OFFER_IDS)
@@ -520,6 +561,12 @@ zapfire/
 │   ├── chrome-web-store-submission.md    ← textos prontos + checklist + justificativas de permissões
 │   ├── backup-format.md                  ← schema ZapVoice 3.0.0 + mapeamentos do import/export
 │   └── sprint5-tracking.md               ← Sprint 5 — tracking + relatórios + daily report
+│
+├── cws-assets/                           ← screenshots + promo tiles pra Chrome Web Store
+│   │                                       (separado de extension/assets/ pra não inflar o zip)
+│   ├── Screenshot_1..5.png                ← 1280x800 pro listing CWS
+│   ├── sidebar.png                        ← screenshot extra
+│   └── Design sem nome*.png               ← drafts do promo tile 440x280
 │
 ├── backend/                              ← Node.js + Fastify + Prisma + PostgreSQL
 │   ├── .env                              ← gitignored (secrets)
