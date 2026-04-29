@@ -139,11 +139,16 @@ function toast(message, type = 'info') {
   const el = $('toast');
   el.textContent = message;
   el.className = 'toast ' + type;
-  el.hidden = false;
+  // Popover API: top-layer (acima de qualquer dialog aberto). Se já
+  // tava aberto, fecha primeiro pra evitar InvalidStateError.
+  try { el.hidePopover(); } catch (_) {}
+  try { el.showPopover(); } catch (_) {}
   if (toastTimer) clearTimeout(toastTimer);
   // Toasts de sucesso ficam mais tempo — usuário precisa enxergar
   const duration = type === 'success' ? 4200 : 2800;
-  toastTimer = setTimeout(() => { el.hidden = true; }, duration);
+  toastTimer = setTimeout(() => {
+    try { el.hidePopover(); } catch (_) {}
+  }, duration);
 }
 
 // ============================================================
@@ -1052,14 +1057,14 @@ async function handleFileSelected(file) {
   // PTT do WhatsApp. Usa opus-media-recorder (polyfill WASM) — o
   // MediaRecorder nativo do Chrome só produz WebM (WA rejeita).
   if (draft.type === 'audio' && !isOggOpus(file)) {
-    toast('Convertendo áudio pra OGG Opus...', 'info');
+    setDropzoneLoading(true);
     try {
       const opus = await convertToOggOpus(file);
       draft.content = opus;
       draft.mimeType = opus.type;
       draft.size = opus.size;
       draft.duration = await getMediaDuration(opus, 'audio');
-      toast(`Convertido — ${formatSize(opus.size)}`, 'success');
+      toast(`✓ Áudio convertido — ${formatSize(opus.size)}`, 'success');
     } catch (e) {
       console.warn('Conversão OGG falhou:', e);
       toast('Conversão falhou, salvando original (waveform simples)', 'warning');
@@ -1067,6 +1072,8 @@ async function handleFileSelected(file) {
       draft.mimeType = file.type;
       draft.size = file.size;
       draft.duration = await getMediaDuration(file, 'audio');
+    } finally {
+      setDropzoneLoading(false);
     }
   } else {
     draft.content = file;
@@ -1085,6 +1092,21 @@ async function handleFileSelected(file) {
   }
 
   refreshFilePreview();
+}
+
+function setDropzoneLoading(loading) {
+  const dz = $('dropzone');
+  const def = $('dropzone-default');
+  const ld = $('dropzone-loading');
+  if (!dz || !def || !ld) return;
+  dz.classList.toggle('is-loading', !!loading);
+  def.hidden = !!loading;
+  ld.hidden = !loading;
+  // Bloqueia clique abrir file picker durante a conversão
+  dz.style.pointerEvents = loading ? 'none' : '';
+  // Trava o salvar pra evitar tentar salvar antes da conversão terminar
+  const saveBtn = document.querySelector('#form-item button[type="submit"]');
+  if (saveBtn) saveBtn.disabled = !!loading;
 }
 
 // ------------------------------------------------------------

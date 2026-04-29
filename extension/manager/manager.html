@@ -112,8 +112,16 @@
         <div class="field" id="field-file">
           <span>Arquivo</span>
           <div class="dropzone" id="dropzone">
-            <div class="dropzone-icon">⇣</div>
-            <div class="dropzone-text">Clique pra escolher ou arraste aqui</div>
+            <div class="dropzone-default" id="dropzone-default">
+              <div class="dropzone-icon">⇣</div>
+              <div class="dropzone-text">Clique pra escolher ou arraste aqui</div>
+            </div>
+            <div class="dropzone-loading" id="dropzone-loading" hidden>
+              <div class="spinner"></div>
+              <div class="dropzone-loading-text" id="dropzone-loading-text">
+                Convertendo áudio para o formato do WhatsApp…
+              </div>
+            </div>
             <input type="file" id="item-file" hidden />
           </div>
           <div class="file-info" id="file-info" hidden></div>
@@ -478,8 +486,9 @@
     </div>
   </dialog>
 
-  <!-- Toast -->
-  <div class="toast" id="toast" hidden></div>
+  <!-- Toast — popover="manual" coloca no top-layer pra ficar acima de
+       dialogs abertos (showModal cria stacking context separado) -->
+  <div class="toast" id="toast" popover="manual"></div>
 
   <!-- Polyfill MediaRecorder com suporte a OGG Opus real
        (Chrome nativo só exporta WebM, WA exige OGG pro waveform correto) -->

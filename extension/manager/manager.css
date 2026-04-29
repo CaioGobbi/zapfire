@@ -969,6 +969,27 @@ dialog::backdrop {
 .dropzone-icon { font-size: 28px; color: var(--text-dim); margin-bottom: 4px; }
 .dropzone-text { font-size: 13px; color: var(--text-dim); }
 
+/* Estado de loading do dropzone (conversão de áudio) */
+.dropzone.is-loading { cursor: wait; border-color: var(--type-audio); background: var(--type-audio-bg); }
+.dropzone.is-loading:hover { border-color: var(--type-audio); background: var(--type-audio-bg); }
+.dropzone-default[hidden],
+.dropzone-loading[hidden] { display: none !important; }
+.dropzone-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.dropzone-loading-text { font-size: 13px; color: var(--type-audio); font-weight: 600; }
+.spinner {
+  width: 30px; height: 30px;
+  border: 3px solid var(--border);
+  border-top-color: var(--type-audio);
+  border-radius: 50%;
+  animation: zfSpin 0.7s linear infinite;
+}
+@keyframes zfSpin { to { transform: rotate(360deg); } }
+
 .file-info {
   font-size: 12px;
   color: var(--text-dim);
@@ -1276,6 +1297,13 @@ dialog::backdrop {
   position: fixed;
   right: 24px;
   bottom: 24px;
+  /* Override do UA stylesheet do popover (inset:0; margin:auto) —
+     senão o toast iria pro centro da tela */
+  top: auto;
+  left: auto;
+  margin: 0;
+  width: auto;
+  height: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-left-width: 4px;
@@ -1286,7 +1314,6 @@ dialog::backdrop {
   color: var(--text);
   box-shadow: 0 12px 32px rgba(0,0,0,0.55);
   animation: toastIn 0.15s ease-out;
-  z-index: 1000;
   max-width: 480px;
 }
 .toast.success { border-color: var(--success); border-left-color: var(--success); color: var(--success); }
