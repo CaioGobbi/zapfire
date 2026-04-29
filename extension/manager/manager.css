@@ -1097,12 +1097,29 @@ dialog::backdrop {
   transition: all 0.1s;
 }
 .step-tab:hover { border-color: var(--border-hover); color: var(--text); }
+.step-tab .menu-dot { width: 10px; height: 10px; }
+
+/* Ícone do tipo (substitui os dots) — sempre na cor do tipo,
+   independente do estado active */
+.step-tab-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.step-tab--text  .step-tab-icon { color: var(--type-text); }
+.step-tab--audio .step-tab-icon { color: var(--type-audio); }
+.step-tab--media .step-tab-icon { color: var(--type-media); }
+.step-tab--file  .step-tab-icon { color: var(--type-file); }
+
+/* Active: borda + bg destacam pelo tipo (não mais o accent global) */
 .step-tab.active {
   background: var(--bg-hover);
-  border-color: var(--accent);
   color: var(--text);
 }
-.step-tab .menu-dot { width: 10px; height: 10px; }
+.step-tab--text.active  { border-color: var(--type-text); background: var(--type-text-bg); }
+.step-tab--audio.active { border-color: var(--type-audio); background: var(--type-audio-bg); }
+.step-tab--media.active { border-color: var(--type-media); background: var(--type-media-bg); }
+.step-tab--file.active  { border-color: var(--type-file); background: var(--type-file-bg); }
 
 /* Custom select do item (estilo dark + busca) */
 .custom-select {
