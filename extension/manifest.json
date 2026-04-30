@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Zapfire — Superpoderes no WhatsApp Web",
   "short_name": "Zapfire",
-  "version": "0.2.2",
-  "description": "Envie áudios, funis e scripts no WhatsApp Web com 1 clique. Ferramenta oficial da IMP.",
+  "version": "0.2.3",
+  "description": "Envie áudios, funis e scripts no WhatsApp Web com 1 clique.",
 
   "permissions": [
     "storage",
