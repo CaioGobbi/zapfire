@@ -1543,18 +1543,37 @@ function renderStepList() {
       <span class="list-badge list-badge--${typeColorKey(item.type)}">${badgeFor(item.type)}</span>
       <span class="cs-item-name">${escapeHTML(item.title)}</span>
     `;
-    row.addEventListener('click', () => {
+    row.addEventListener('click', async () => {
       setStepItemValue(item.id);
-      // Áudio: pré-preenche o delay com a duração do próprio áudio
-      // (default sensato — o usuário pode sobrescrever se quiser).
-      if (item.type === 'audio' && Number(item.duration) > 0) {
-        const totalSec = Math.round(Number(item.duration));
-        const minEl = $('step-delay-min');
-        const secEl = $('step-delay-sec');
-        if (minEl) minEl.value = Math.floor(totalSec / 60);
-        if (secEl) secEl.value = totalSec % 60;
-      }
       closeStepPanel();
+      // Áudio: pré-preenche o delay com a duração do áudio (default
+      // sensato — o usuário pode sobrescrever). Itens importados de
+      // backup ZapVoice antigo não têm duration salvo; nesse caso
+      // calcula on-the-fly e persiste pra evitar recomputar.
+      if (item.type === 'audio') {
+        let durSec = Number(item.duration);
+        if (!(durSec > 0) && item.content instanceof Blob) {
+          try {
+            const computed = await getMediaDuration(item.content, 'audio');
+            if (computed && computed > 0) {
+              durSec = computed;
+              // Persiste no IndexedDB pra não recalcular toda vez.
+              // Best-effort — falha silenciosa não bloqueia o user.
+              try {
+                await storage.updateItem(item.id, { duration: durSec });
+                item.duration = durSec; // refresh ref local
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+        if (durSec > 0) {
+          const totalSec = Math.round(durSec);
+          const minEl = $('step-delay-min');
+          const secEl = $('step-delay-sec');
+          if (minEl) minEl.value = Math.floor(totalSec / 60);
+          if (secEl) secEl.value = totalSec % 60;
+        }
+      }
     });
     list.appendChild(row);
   }

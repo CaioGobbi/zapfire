@@ -91,6 +91,30 @@ function mimeOfDataUri(dataUri) {
   return dataUri.slice(5, end === -1 ? undefined : end).toLowerCase();
 }
 
+// Lê duração (segundos, float) de um blob de áudio/vídeo via DOM.
+// Retorna null se não conseguir (ex: codec desconhecido). Usado no
+// import pra preencher item.duration — feature do step modal de
+// funil que pré-preenche o delay com a duração do áudio.
+function readBlobDuration(blob, kind) {
+  return new Promise((resolve) => {
+    if (!(blob instanceof Blob)) return resolve(null);
+    let el;
+    try {
+      el = document.createElement(kind === 'video' ? 'video' : 'audio');
+    } catch (_) { return resolve(null); }
+    const url = URL.createObjectURL(blob);
+    const cleanup = () => { try { URL.revokeObjectURL(url); } catch (_) {} };
+    el.preload = 'metadata';
+    el.onloadedmetadata = () => {
+      const d = el.duration;
+      cleanup();
+      resolve(isFinite(d) && d > 0 ? d : null);
+    };
+    el.onerror = () => { cleanup(); resolve(null); };
+    el.src = url;
+  });
+}
+
 // MIME → tipo interno do Zapfire
 function detectTypeFromMime(mime) {
   const m = (mime || '').toLowerCase();
@@ -414,6 +438,7 @@ export async function importBackup(input, options = {}) {
       }
       const blob = await dataUriToBlob(obj.data);
       const newId = pickId(meta.id, regenerateIds, idMap);
+      const duration = await readBlobDuration(blob, 'audio');
       const item = {
         id: newId,
         type: 'audio',
@@ -421,6 +446,7 @@ export async function importBackup(input, options = {}) {
         content: blob,
         mimeType: blob.type || 'audio/ogg',
         size: blob.size,
+        duration,
         createdAt: nextItemCreatedAt(),
         isPtt: typeof obj.isPtt === 'boolean' ? obj.isPtt : (meta.isPtt ?? true),
         asViewOnce: meta.asViewOnce ?? false,
@@ -450,6 +476,7 @@ export async function importBackup(input, options = {}) {
       // Detectado pode dar 'audio' / 'file' raramente — força image/video
       const internalType = detected === 'video' ? 'video' : 'image';
       const newId = pickId(meta.id, regenerateIds, idMap);
+      const duration = internalType === 'video' ? await readBlobDuration(blob, 'video') : undefined;
       const item = {
         id: newId,
         type: internalType,
@@ -457,6 +484,7 @@ export async function importBackup(input, options = {}) {
         content: blob,
         mimeType: blob.type || (internalType === 'video' ? 'video/mp4' : 'image/jpeg'),
         size: blob.size,
+        ...(duration ? { duration } : {}),
         createdAt: nextItemCreatedAt(),
         caption: typeof obj.caption === 'string' ? obj.caption : '',
         asViewOnce: meta.asViewOnce ?? false,
