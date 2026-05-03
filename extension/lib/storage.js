@@ -501,8 +501,33 @@ export async function getFunnel(id) {
 export async function listFunnels() {
   const raw = await tx(STORE_FUNNELS, 'readonly', (store) => store.getAll());
   const all = raw.map(withFunnelDefaults);
-  all.sort((a, b) => b.createdAt - a.createdAt);
+  // Mesmo critério dos items (drag-and-drop reorder): sortOrder
+  // explícito vence; sem ele, cai pra createdAt DESC.
+  const orderKey = (f) => (typeof f.sortOrder === 'number' ? f.sortOrder : -f.createdAt);
+  all.sort((a, b) => orderKey(a) - orderKey(b));
   return all;
+}
+
+// Reordena funis pela ordem dos IDs passados. Mesmo padrão do
+// reorderItems — atribui sortOrder 0..N na ordem listada, batch
+// transaction. Usado pelo drag-and-drop do funnel list view.
+export async function reorderFunnels(orderedIds) {
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+  await tx(STORE_FUNNELS, 'readwrite', (store) => {
+    for (let i = 0; i < orderedIds.length; i++) {
+      const id = orderedIds[i];
+      const idx = i;
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const f = getReq.result;
+        if (f) {
+          f.sortOrder = idx;
+          store.put(f);
+        }
+      };
+    }
+    return undefined;
+  });
 }
 
 export async function updateFunnel(id, patch) {

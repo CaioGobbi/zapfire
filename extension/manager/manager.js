@@ -1000,17 +1000,84 @@ function itemRow(item) {
 function funnelRow(funnel) {
   const row = document.createElement('div');
   row.className = 'list-row list-row--funnel';
-  row.onclick = () => openFunnelModal(funnel);
+  row.dataset.funnelId = funnel.id;
+  row.draggable = true;
+
   // Sprint 5 — ícone de tracking depois do nome (mesmo SVG da sidebar)
   const trackingIcon = funnel.trackingEnabled
     ? `<span class="list-track-badge" title="Funil monitorado"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span>`
     : '';
   row.innerHTML = `
+    <span class="list-handle" title="Arrastar pra reordenar">≡</span>
     <span class="list-badge list-badge--funnel">FUNIL</span>
     <span class="list-name">${escapeHTML(funnel.name || '(sem nome)')}</span>
     ${trackingIcon}
     <span class="list-meta">${funnel.steps.length} step(s)</span>
   `;
+
+  // Drag inicia só pelo handle ≡ (drag em outras partes não tem efeito).
+  // Diferente de itemRow, funnelRow não tem fluxo "copy pro funil",
+  // então o mousedown só ativa a flag de reorder.
+  let dragArmed = false;
+  row.querySelector('.list-handle').addEventListener('mousedown', () => { dragArmed = true; });
+  row.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('.list-handle')) dragArmed = false;
+  });
+
+  row.addEventListener('dragstart', (e) => {
+    if (!dragArmed) {
+      // Não armou pelo handle → cancela o drag (deixa o click funcionar)
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData('text/zf-funnel-reorder-id', funnel.id);
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('list-row--dragging');
+  });
+  row.addEventListener('dragend', () => {
+    dragArmed = false;
+    row.classList.remove('list-row--dragging');
+    row.classList.remove('list-row--dragover');
+  });
+  row.addEventListener('dragover', (e) => {
+    if (e.dataTransfer.types.includes('text/zf-funnel-reorder-id')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('list-row--dragover');
+    }
+  });
+  row.addEventListener('dragleave', () => row.classList.remove('list-row--dragover'));
+  row.addEventListener('drop', async (e) => {
+    row.classList.remove('list-row--dragover');
+    const draggedId = e.dataTransfer.getData('text/zf-funnel-reorder-id');
+    if (!draggedId || draggedId === funnel.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const container = row.parentElement;
+    if (!container) return;
+    const allRows = Array.from(container.querySelectorAll('.list-row[data-funnel-id]'));
+    const orderedIds = allRows.map((r) => r.dataset.funnelId).filter(Boolean);
+    const fromIdx = orderedIds.indexOf(draggedId);
+    const toIdx = orderedIds.indexOf(funnel.id);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = orderedIds.splice(fromIdx, 1);
+    orderedIds.splice(toIdx, 0, moved);
+
+    try {
+      await storage.reorderFunnels(orderedIds);
+      renderList();
+    } catch (err) {
+      toast('Erro ao reordenar: ' + (err.message || err), 'error');
+    }
+  });
+
+  // Click → abrir modal de edição (handle não conta)
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.list-handle')) return;
+    openFunnelModal(funnel);
+  });
+
   return row;
 }
 
