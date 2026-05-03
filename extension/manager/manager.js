@@ -920,11 +920,6 @@ function itemRow(item) {
   row.dataset.id = item.id;
   row.draggable = true;
 
-  // Modo do drag: 'reorder' (handle) ou 'copy' (qualquer outra parte).
-  // Existente: arrastar pro funil já manda 'text/zf-item-id'. Novo:
-  // arrastar pelo handle ≡ entre rows reordena a lista.
-  row.dataset.dragMode = 'copy';
-
   row.innerHTML = `
     <span class="list-handle" title="Arrastar pra reordenar">≡</span>
     <span class="list-badge list-badge--${colorKey}">${badgeFor(item.type)}</span>
@@ -932,15 +927,17 @@ function itemRow(item) {
     <span class="list-meta">${rowMeta(item)}</span>
   `;
 
-  const handle = row.querySelector('.list-handle');
-  // mousedown define o modo do próximo dragstart.
-  handle.addEventListener('mousedown', () => { row.dataset.dragMode = 'reorder'; });
+  // Closure-based: mousedown no handle "arma" o modo reorder pro
+  // próximo dragstart. Em qualquer outra área do row, desarma — o
+  // drag fallback é o existente "copiar pro funil" (Sprint 3).
+  let dragArmed = false;
+  row.querySelector('.list-handle').addEventListener('mousedown', () => { dragArmed = true; });
   row.addEventListener('mousedown', (e) => {
-    if (!e.target.closest('.list-handle')) row.dataset.dragMode = 'copy';
+    if (!e.target.closest('.list-handle')) dragArmed = false;
   });
 
   row.addEventListener('dragstart', (e) => {
-    if (row.dataset.dragMode === 'reorder') {
+    if (dragArmed) {
       e.dataTransfer.setData('text/zf-item-reorder-id', item.id);
       e.dataTransfer.effectAllowed = 'move';
       row.classList.add('list-row--dragging');
@@ -950,6 +947,7 @@ function itemRow(item) {
     }
   });
   row.addEventListener('dragend', () => {
+    dragArmed = false;
     row.classList.remove('list-row--dragging');
     row.classList.remove('list-row--dragover');
   });
@@ -968,8 +966,6 @@ function itemRow(item) {
     e.preventDefault();
     e.stopPropagation();
 
-    // Pega a ordem atual do DOM, move o dragged pra antes desta row,
-    // persiste e re-renderiza
     const container = row.parentElement;
     if (!container) return;
     const allRows = Array.from(container.querySelectorAll('.list-row[data-id]'));
@@ -988,7 +984,6 @@ function itemRow(item) {
     }
   });
 
-  // Click → editar (mas ignora click no handle e dragend)
   row.addEventListener('click', (e) => {
     if (e.target.closest('.list-handle')) return;
     openItemModal(item);
