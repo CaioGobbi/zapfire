@@ -298,8 +298,39 @@ export async function listItems(filters = {}) {
     });
   }
 
-  results.sort((a, b) => b.createdAt - a.createdAt);
+  // Sort: items com sortOrder explícito vão na ordem definida pelo
+  // user (drag-and-drop). Items sem sortOrder caem pra "newest first"
+  // (createdAt DESC). Mistura: items sem sortOrder aparecem ANTES dos
+  // com sortOrder pra que adições novas fiquem no topo. Isso é feito
+  // tratando undefined como -Infinity no sort key.
+  const orderKey = (it) => (typeof it.sortOrder === 'number' ? it.sortOrder : -it.createdAt);
+  results.sort((a, b) => orderKey(a) - orderKey(b));
   return results;
+}
+
+// Reordena items pela ordem dos IDs passados — atribui sortOrder
+// 0, 1, 2, ... pros items listados, na ordem. Items não listados
+// preservam seu sortOrder atual (ou ficam sem). Usado pelo drag-drop
+// do list view. Batch numa única IndexedDB transaction.
+export async function reorderItems(orderedIds) {
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+  await tx(STORE_ITEMS, 'readwrite', (store) => {
+    // Dispara get + put pra cada id. A transaction só completa
+    // depois que todos os onsuccess + put terminarem.
+    for (let i = 0; i < orderedIds.length; i++) {
+      const id = orderedIds[i];
+      const idx = i;
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const item = getReq.result;
+        if (item) {
+          item.sortOrder = idx;
+          store.put(item);
+        }
+      };
+    }
+    return undefined;
+  });
 }
 
 // Atualiza um item parcial. Faz merge com o existente.

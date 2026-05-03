@@ -919,17 +919,81 @@ function itemRow(item) {
   row.className = `list-row list-row--${colorKey}`;
   row.dataset.id = item.id;
   row.draggable = true;
-  row.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('text/zf-item-id', item.id);
-    e.dataTransfer.effectAllowed = 'copy';
-  });
-  row.onclick = () => openItemModal(item);
+
+  // Modo do drag: 'reorder' (handle) ou 'copy' (qualquer outra parte).
+  // Existente: arrastar pro funil já manda 'text/zf-item-id'. Novo:
+  // arrastar pelo handle ≡ entre rows reordena a lista.
+  row.dataset.dragMode = 'copy';
 
   row.innerHTML = `
+    <span class="list-handle" title="Arrastar pra reordenar">≡</span>
     <span class="list-badge list-badge--${colorKey}">${badgeFor(item.type)}</span>
     <span class="list-name">${escapeHTML(item.title || '(sem título)')}</span>
     <span class="list-meta">${rowMeta(item)}</span>
   `;
+
+  const handle = row.querySelector('.list-handle');
+  // mousedown define o modo do próximo dragstart.
+  handle.addEventListener('mousedown', () => { row.dataset.dragMode = 'reorder'; });
+  row.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('.list-handle')) row.dataset.dragMode = 'copy';
+  });
+
+  row.addEventListener('dragstart', (e) => {
+    if (row.dataset.dragMode === 'reorder') {
+      e.dataTransfer.setData('text/zf-item-reorder-id', item.id);
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('list-row--dragging');
+    } else {
+      e.dataTransfer.setData('text/zf-item-id', item.id);
+      e.dataTransfer.effectAllowed = 'copy';
+    }
+  });
+  row.addEventListener('dragend', () => {
+    row.classList.remove('list-row--dragging');
+    row.classList.remove('list-row--dragover');
+  });
+  row.addEventListener('dragover', (e) => {
+    if (e.dataTransfer.types.includes('text/zf-item-reorder-id')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('list-row--dragover');
+    }
+  });
+  row.addEventListener('dragleave', () => row.classList.remove('list-row--dragover'));
+  row.addEventListener('drop', async (e) => {
+    row.classList.remove('list-row--dragover');
+    const draggedId = e.dataTransfer.getData('text/zf-item-reorder-id');
+    if (!draggedId || draggedId === item.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Pega a ordem atual do DOM, move o dragged pra antes desta row,
+    // persiste e re-renderiza
+    const container = row.parentElement;
+    if (!container) return;
+    const allRows = Array.from(container.querySelectorAll('.list-row[data-id]'));
+    const orderedIds = allRows.map((r) => r.dataset.id).filter(Boolean);
+    const fromIdx = orderedIds.indexOf(draggedId);
+    const toIdx = orderedIds.indexOf(item.id);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = orderedIds.splice(fromIdx, 1);
+    orderedIds.splice(toIdx, 0, moved);
+
+    try {
+      await storage.reorderItems(orderedIds);
+      renderList();
+    } catch (err) {
+      toast('Erro ao reordenar: ' + (err.message || err), 'error');
+    }
+  });
+
+  // Click → editar (mas ignora click no handle e dragend)
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.list-handle')) return;
+    openItemModal(item);
+  });
+
   return row;
 }
 
