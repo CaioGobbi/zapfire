@@ -315,7 +315,12 @@ async function renderList() {
     const items = await storage.listItems({ type, search: state.search || undefined });
     all.push(...items);
   }
-  all.sort((a, b) => b.createdAt - a.createdAt);
+  // Mantém o mesmo critério do storage.listItems pra que o
+  // sortOrder definido pelo user (drag-and-drop) seja respeitado
+  // depois do merge entre tipos. Senão o createdAt-DESC anula o
+  // reorder.
+  const orderKey = (it) => (typeof it.sortOrder === 'number' ? it.sortOrder : -it.createdAt);
+  all.sort((a, b) => orderKey(a) - orderKey(b));
   renderItemList(grid, all);
 }
 
