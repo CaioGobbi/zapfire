@@ -1723,6 +1723,84 @@ function setStepItemValue(itemId) {
     label.textContent = 'Selecione um item';
     label.classList.add('cs-label--placeholder');
   }
+  renderStepPreview(item);
+}
+
+// Render do preview do item selecionado dentro do step modal.
+// Visual condensado dependendo do tipo: texto (snippet), áudio
+// (player + duração), imagem (thumb), vídeo (player), arquivo
+// (nome+tamanho). Sem item, esconde tudo.
+let stepPreviewBlobUrl = null;
+function renderStepPreview(item) {
+  const box = $('step-preview');
+  if (!box) return;
+  // Limpa blob URL anterior pra evitar leak
+  if (stepPreviewBlobUrl) {
+    try { URL.revokeObjectURL(stepPreviewBlobUrl); } catch (_) {}
+    stepPreviewBlobUrl = null;
+  }
+  box.innerHTML = '';
+
+  if (!item) { box.hidden = true; return; }
+
+  const sizeStr = item.size ? formatSize(item.size) : '';
+  const durStr = item.duration ? formatDuration(item.duration) : '';
+  const metaBits = [];
+  if (sizeStr) metaBits.push(sizeStr);
+  if (durStr) metaBits.push(durStr);
+  const metaHtml = metaBits.length
+    ? `<div class="step-preview-meta">${metaBits.join(' • ')}</div>` : '';
+
+  if (item.type === 'text') {
+    const txt = String(item.content || '').slice(0, 800);
+    box.innerHTML = `
+      <div class="step-preview-label">Pré-visualização</div>
+      <div class="step-preview-text">${escapeHTML(txt)}</div>
+      ${item.content && item.content.length > 800 ? '<div class="step-preview-meta">…</div>' : ''}
+    `;
+  } else if (item.type === 'audio' && item.content instanceof Blob) {
+    stepPreviewBlobUrl = URL.createObjectURL(item.content);
+    box.innerHTML = `
+      <div class="step-preview-label">Pré-visualização</div>
+      <audio class="step-preview-audio" src="${stepPreviewBlobUrl}" controls preload="metadata"></audio>
+      ${metaHtml}
+    `;
+  } else if (item.type === 'image' && item.content instanceof Blob) {
+    stepPreviewBlobUrl = URL.createObjectURL(item.content);
+    box.innerHTML = `
+      <div class="step-preview-label">Pré-visualização</div>
+      <img class="step-preview-image" src="${stepPreviewBlobUrl}" alt="" />
+      ${metaHtml}
+    `;
+  } else if (item.type === 'video' && item.content instanceof Blob) {
+    stepPreviewBlobUrl = URL.createObjectURL(item.content);
+    box.innerHTML = `
+      <div class="step-preview-label">Pré-visualização</div>
+      <video class="step-preview-video" src="${stepPreviewBlobUrl}" controls preload="metadata"></video>
+      ${metaHtml}
+    `;
+  } else if (item.type === 'file') {
+    const name = (item.fileName || item.title || 'arquivo').toString();
+    box.innerHTML = `
+      <div class="step-preview-label">Pré-visualização</div>
+      <div class="step-preview-file">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="step-preview-file-name">${escapeHTML(name)}</span>
+      </div>
+      ${metaHtml}
+    `;
+  } else {
+    box.hidden = true;
+    return;
+  }
+
+  if (item.caption) {
+    const cap = document.createElement('div');
+    cap.className = 'step-preview-caption';
+    cap.textContent = item.caption;
+    box.appendChild(cap);
+  }
+  box.hidden = false;
 }
 
 function toggleStepPanel(force) {
@@ -2293,6 +2371,16 @@ function init() {
   $('modal-step').addEventListener('scroll', () => {
     if (!$('cs-panel').hidden) positionStepPanel();
   }, true);
+
+  // Limpa blob URL do preview ao fechar (evita memory leak)
+  $('modal-step').addEventListener('close', () => {
+    if (stepPreviewBlobUrl) {
+      try { URL.revokeObjectURL(stepPreviewBlobUrl); } catch (_) {}
+      stepPreviewBlobUrl = null;
+    }
+    const box = $('step-preview');
+    if (box) { box.innerHTML = ''; box.hidden = true; }
+  });
 
   // Dropzone do file picker
   const dz = $('dropzone');
