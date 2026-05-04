@@ -47,8 +47,7 @@ const FILTER_TYPES = {
   all: ['text', 'audio', 'image', 'video', 'file'],
   text: ['text'],
   audio: ['audio'],
-  image: ['image'],
-  video: ['video'],
+  media: ['image', 'video'], // unificado — Imagens + Vídeos
   file: ['file'],
 };
 
@@ -373,7 +372,7 @@ async function renderDashboard(container) {
       ${statCardHTML('funnel', 'Funis', counts.funnel, 'funnels')}
       ${statCardHTML('text',   'Mensagens', counts.text, 'text')}
       ${statCardHTML('audio',  'Áudios', counts.audio, 'audio')}
-      ${statCardHTML('media',  'Mídias', counts.media, 'image')}
+      ${statCardHTML('media',  'Mídias', counts.media, 'media')}
       ${statCardHTML('file',   'Documentos', counts.file, 'file')}
     </div>
 
@@ -1313,6 +1312,24 @@ async function handleFileSelected(file) {
 
   if (!draft.title) {
     $('item-title').value = file.name.replace(/\.[^.]+$/, '');
+  }
+
+  // Auto-detect entre image/video pelo MIME do arquivo. Útil quando
+  // user abre o modal pela aba "Mídia" (default 'image') mas seleciona
+  // um vídeo. Atualiza o draft.type + título do modal pra ficar coerente.
+  if ((draft.type === 'image' || draft.type === 'video') && file.type) {
+    const mime = (file.type || '').toLowerCase();
+    const detected = mime.startsWith('video/') ? 'video'
+      : mime.startsWith('image/') ? 'image'
+      : null;
+    if (detected && detected !== draft.type) {
+      draft.type = detected;
+      const label = TYPE_LABELS[detected] || 'item';
+      const article = TYPE_GENDER[detected] === 'f' ? 'Nova' : 'Novo';
+      const titleEl = $('modal-item-title');
+      // Preserva "Editar X" se for edição (id já existe)
+      if (titleEl && !draft.id) titleEl.textContent = `${article} ${label}`;
+    }
   }
 
   // Áudio: converte pra OGG/Opus REAL pra ter waveform correto no
@@ -2275,9 +2292,9 @@ function updateCreateButton() {
     funnels: '+ Novo funil',
     text: '+ Nova mensagem',
     audio: '+ Novo áudio',
-    image: '+ Nova imagem',
-    video: '+ Novo vídeo',
+    media: '+ Nova mídia',
     file: '+ Novo arquivo',
+    reports: null, // oculto
   };
   const label = labels[state.filter];
   if (!label) {
@@ -2304,10 +2321,14 @@ function init() {
   $('btn-create').addEventListener('click', () => {
     const f = state.filter;
     if (f === 'funnels') openFunnelModal(null);
-    else if (f === 'text' || f === 'audio' || f === 'image' || f === 'video' || f === 'file') {
+    else if (f === 'text' || f === 'audio' || f === 'file') {
       openItemModal(f);
+    } else if (f === 'media') {
+      // Mídia unificada: abre modal com type='image' como default;
+      // handleFileSelected auto-detecta video pelo MIME e ajusta
+      openItemModal('image');
     }
-    // Em "Tudo" o botão fica oculto — nenhum tipo implícito
+    // Em "Tudo" e Relatórios o botão fica oculto — nenhum tipo implícito
   });
 
   // Modal close buttons
