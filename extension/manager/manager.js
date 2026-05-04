@@ -941,6 +941,11 @@ function setupRowReorderDrag({ row, dragType, persist, getRowId, isArmed }) {
     e.dataTransfer.setData(dragType, getRowId(row));
     e.dataTransfer.effectAllowed = 'move';
     row.classList.add('list-row--ghost');
+
+    // Garante que o container do drag aceita drop em qualquer área
+    // (gaps entre rows, área abaixo do último). Idempotente —
+    // attachContainerDropTarget tem dataset flag pra não duplicar.
+    attachContainerDropTarget(container);
   });
 
   row.addEventListener('dragover', (e) => {
@@ -969,32 +974,84 @@ function setupRowReorderDrag({ row, dragType, persist, getRowId, isArmed }) {
     cleanupReorderDrag();
   });
 
-  row.addEventListener('drop', async (e) => {
+  // O drop em si é tratado pelo container — esse listener só
+  // intercepta pra evitar que o evento chegue como "no-op" se
+  // soltar exatamente em cima de um row. Stop propagation pra
+  // não duplicar com o handler do container.
+  row.addEventListener('drop', (e) => {
     const drag = activeReorderDrag;
     if (!drag || drag.dragType !== dragType) return;
-    const draggedId = e.dataTransfer.getData(dragType);
-    if (!draggedId) return;
     e.preventDefault();
     e.stopPropagation();
+    finalizeReorderDrop(e);
+  });
+}
 
-    const orderedIds = drag.siblings.map(getRowId).filter(Boolean);
-    const fromIdx = orderedIds.indexOf(draggedId);
-    const targetIdx = drag.currentTargetIdx;
-    if (fromIdx === -1 || fromIdx === targetIdx) {
-      cleanupReorderDrag();
-      return;
-    }
-    const [moved] = orderedIds.splice(fromIdx, 1);
-    orderedIds.splice(targetIdx, 0, moved);
+// Anexa drop handler no container UMA VEZ por drag-type. Permite
+// soltar em qualquer área (gaps, espaço abaixo do último row).
+// O container.dataset usa flag pra não duplicar listener entre
+// re-renders (o container persiste, só os rows mudam).
+function attachContainerDropTarget(container) {
+  if (container.dataset.reorderDropAttached === '1') return;
+  container.dataset.reorderDropAttached = '1';
 
-    cleanupReorderDrag();
-    try {
-      await persist(orderedIds);
-      renderList();
-    } catch (err) {
-      toast('Erro ao reordenar: ' + (err.message || err), 'error');
+  container.addEventListener('dragover', (e) => {
+    const drag = activeReorderDrag;
+    if (!drag) return;
+    if (!e.dataTransfer.types.includes(drag.dragType)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Se o cursor está abaixo do último row, força target = última
+    // posição (drop no fim). (Hover sobre rows já atualiza
+    // currentTargetIdx via os listeners de cada row.)
+    const lastRow = drag.siblings[drag.siblings.length - 1];
+    if (lastRow && lastRow !== drag.row) {
+      const lastRect = lastRow.getBoundingClientRect();
+      if (e.clientY > lastRect.bottom) {
+        const endTarget = drag.siblings.length - 1; // post-splice last index
+        if (drag.currentTargetIdx !== endTarget) {
+          drag.currentTargetIdx = endTarget;
+          applyShifts(drag);
+        }
+      }
     }
   });
+
+  container.addEventListener('drop', (e) => {
+    const drag = activeReorderDrag;
+    if (!drag) return;
+    e.preventDefault();
+    finalizeReorderDrop(e);
+  });
+}
+
+async function finalizeReorderDrop(e) {
+  const drag = activeReorderDrag;
+  if (!drag) return;
+  const draggedId = e.dataTransfer.getData(drag.dragType);
+  if (!draggedId) {
+    cleanupReorderDrag();
+    return;
+  }
+  const orderedIds = drag.siblings.map(drag.getRowId).filter(Boolean);
+  const fromIdx = orderedIds.indexOf(draggedId);
+  const targetIdx = drag.currentTargetIdx;
+  if (fromIdx === -1 || fromIdx === targetIdx) {
+    cleanupReorderDrag();
+    return;
+  }
+  const [moved] = orderedIds.splice(fromIdx, 1);
+  orderedIds.splice(targetIdx, 0, moved);
+
+  const persist = drag.persist;
+  cleanupReorderDrag();
+  try {
+    await persist(orderedIds);
+    renderList();
+  } catch (err) {
+    toast('Erro ao reordenar: ' + (err.message || err), 'error');
+  }
 }
 
 function applyShifts(drag) {
