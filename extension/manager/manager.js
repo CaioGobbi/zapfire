@@ -884,6 +884,144 @@ function statCardHTML(colorKey, label, count, targetFilter) {
 }
 
 // ------------------------------------------------------------
+// Helper de drag-reorder com live shift
+// ------------------------------------------------------------
+// Aplicado em itemRow e funnelRow. Quando user arrasta um row:
+// - Row arrastado fica ghost (opacity baixa)
+// - Demais rows shiftam via transform translateY pra mostrar onde
+//   o item vai cair
+// CSS .list-row tem transition: transform pra animar suave.
+//
+// Args: { row, container, dragType, persist, sameTypeSelector }
+//   row              — o <div> do row sendo configurado
+//   container        — o pai que tem todos os irmãos
+//   dragType         — MIME type customizado ('text/zf-item-reorder-id'
+//                      ou 'text/zf-funnel-reorder-id')
+//   persist(orderedIds) — async, chama storage.reorderItems/Funnels
+//   getRowId(row)    — extrai id de um irmão (ex: r => r.dataset.id)
+//   isArmed()        — opcional: retorna bool indicando se o drag deve
+//                      iniciar como reorder (default: sempre true)
+// ------------------------------------------------------------
+let activeReorderDrag = null;
+
+function setupRowReorderDrag({ row, dragType, persist, getRowId, isArmed }) {
+  const armed = typeof isArmed === 'function' ? isArmed : () => true;
+
+  row.addEventListener('dragstart', (e) => {
+    if (!armed(e)) return; // deixa o caller cancelar (ex: drag pra funil em items)
+    const container = row.parentElement;
+    if (!container) return;
+
+    const siblings = Array.from(container.querySelectorAll('.list-row'));
+    const origIndex = siblings.indexOf(row);
+    if (origIndex === -1) return;
+
+    // Distância entre rows adjacentes (inclui gap do flex/grid)
+    const rect = row.getBoundingClientRect();
+    const nextSib = siblings[origIndex + 1];
+    const prevSib = siblings[origIndex - 1];
+    const shiftDist = nextSib
+      ? nextSib.getBoundingClientRect().top - rect.top
+      : prevSib
+        ? rect.top - prevSib.getBoundingClientRect().top
+        : rect.height + 8;
+
+    activeReorderDrag = {
+      dragType,
+      row,
+      container,
+      siblings,
+      origIndex,
+      shiftDist,
+      currentTargetIdx: origIndex,
+      persist,
+      getRowId,
+    };
+
+    e.dataTransfer.setData(dragType, getRowId(row));
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('list-row--ghost');
+  });
+
+  row.addEventListener('dragover', (e) => {
+    const drag = activeReorderDrag;
+    if (!drag || drag.dragType !== dragType) return;
+    if (!e.dataTransfer.types.includes(dragType)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const targetIdx = drag.siblings.indexOf(row);
+    if (targetIdx === -1) return;
+
+    // Decide se mouse está na metade de cima (drop antes) ou de baixo (depois)
+    const r = row.getBoundingClientRect();
+    const insertBefore = e.clientY < r.top + r.height / 2;
+    let newIdx = insertBefore ? targetIdx : targetIdx + 1;
+    // Ajuste: se target está depois do origem, splice fromIdx encurta o array
+    if (newIdx > drag.origIndex) newIdx -= 1;
+    if (newIdx === drag.currentTargetIdx) return; // sem mudança
+
+    drag.currentTargetIdx = newIdx;
+    applyShifts(drag);
+  });
+
+  row.addEventListener('dragend', () => {
+    cleanupReorderDrag();
+  });
+
+  row.addEventListener('drop', async (e) => {
+    const drag = activeReorderDrag;
+    if (!drag || drag.dragType !== dragType) return;
+    const draggedId = e.dataTransfer.getData(dragType);
+    if (!draggedId) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const orderedIds = drag.siblings.map(getRowId).filter(Boolean);
+    const fromIdx = orderedIds.indexOf(draggedId);
+    const targetIdx = drag.currentTargetIdx;
+    if (fromIdx === -1 || fromIdx === targetIdx) {
+      cleanupReorderDrag();
+      return;
+    }
+    const [moved] = orderedIds.splice(fromIdx, 1);
+    orderedIds.splice(targetIdx, 0, moved);
+
+    cleanupReorderDrag();
+    try {
+      await persist(orderedIds);
+      renderList();
+    } catch (err) {
+      toast('Erro ao reordenar: ' + (err.message || err), 'error');
+    }
+  });
+}
+
+function applyShifts(drag) {
+  const { siblings, origIndex, currentTargetIdx, shiftDist, row } = drag;
+  siblings.forEach((sib, idx) => {
+    if (sib === row) return;
+    let translate = 0;
+    if (currentTargetIdx < origIndex) {
+      // movendo pra cima: rows entre [target, origin) shiftam pra baixo
+      if (idx >= currentTargetIdx && idx < origIndex) translate = shiftDist;
+    } else if (currentTargetIdx > origIndex) {
+      // movendo pra baixo: rows entre (origin, target] shiftam pra cima
+      if (idx > origIndex && idx <= currentTargetIdx) translate = -shiftDist;
+    }
+    sib.style.transform = translate ? `translateY(${translate}px)` : '';
+  });
+}
+
+function cleanupReorderDrag() {
+  if (!activeReorderDrag) return;
+  const { siblings, row } = activeReorderDrag;
+  siblings.forEach((s) => { s.style.transform = ''; });
+  row.classList.remove('list-row--ghost');
+  activeReorderDrag = null;
+}
+
+// ------------------------------------------------------------
 // List view (tabs específicas)
 // ------------------------------------------------------------
 function renderItemList(container, items) {
@@ -932,62 +1070,34 @@ function itemRow(item) {
     <span class="list-meta">${rowMeta(item)}</span>
   `;
 
-  // Closure-based: mousedown no handle "arma" o modo reorder pro
-  // próximo dragstart. Em qualquer outra área do row, desarma — o
-  // drag fallback é o existente "copiar pro funil" (Sprint 3).
+  // Items têm 2 modos de drag: reorder (handle) ou copy-pro-funil
+  // (Sprint 3). Mousedown no handle arma reorder pro próximo dragstart;
+  // qualquer outra área desarma e cai no drag legacy.
   let dragArmed = false;
   row.querySelector('.list-handle').addEventListener('mousedown', () => { dragArmed = true; });
   row.addEventListener('mousedown', (e) => {
     if (!e.target.closest('.list-handle')) dragArmed = false;
   });
 
+  // Configura o reorder com live-shift via helper compartilhado.
+  // O isArmed callback decide se o dragstart deve virar reorder.
+  setupRowReorderDrag({
+    row,
+    dragType: 'text/zf-item-reorder-id',
+    persist: (ids) => storage.reorderItems(ids),
+    getRowId: (r) => r.dataset.id,
+    isArmed: () => dragArmed,
+  });
+
+  // Caminho legacy: drag pra funil (Sprint 3). Só dispara se NÃO foi
+  // armado pelo handle. Roda em paralelo ao setupRowReorderDrag — o
+  // mesmo dragstart event pode setar uma OU outra dataTransfer key.
   row.addEventListener('dragstart', (e) => {
-    if (dragArmed) {
-      e.dataTransfer.setData('text/zf-item-reorder-id', item.id);
-      e.dataTransfer.effectAllowed = 'move';
-      row.classList.add('list-row--dragging');
-    } else {
-      e.dataTransfer.setData('text/zf-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copy';
-    }
+    if (dragArmed) return; // já tratado pelo helper
+    e.dataTransfer.setData('text/zf-item-id', item.id);
+    e.dataTransfer.effectAllowed = 'copy';
   });
-  row.addEventListener('dragend', () => {
-    dragArmed = false;
-    row.classList.remove('list-row--dragging');
-    row.classList.remove('list-row--dragover');
-  });
-  row.addEventListener('dragover', (e) => {
-    if (e.dataTransfer.types.includes('text/zf-item-reorder-id')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      row.classList.add('list-row--dragover');
-    }
-  });
-  row.addEventListener('dragleave', () => row.classList.remove('list-row--dragover'));
-  row.addEventListener('drop', async (e) => {
-    row.classList.remove('list-row--dragover');
-    const draggedId = e.dataTransfer.getData('text/zf-item-reorder-id');
-    if (!draggedId || draggedId === item.id) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const container = row.parentElement;
-    if (!container) return;
-    const allRows = Array.from(container.querySelectorAll('.list-row[data-id]'));
-    const orderedIds = allRows.map((r) => r.dataset.id).filter(Boolean);
-    const fromIdx = orderedIds.indexOf(draggedId);
-    const toIdx = orderedIds.indexOf(item.id);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = orderedIds.splice(fromIdx, 1);
-    orderedIds.splice(toIdx, 0, moved);
-
-    try {
-      await storage.reorderItems(orderedIds);
-      renderList();
-    } catch (err) {
-      toast('Erro ao reordenar: ' + (err.message || err), 'error');
-    }
-  });
+  row.addEventListener('dragend', () => { dragArmed = false; });
 
   row.addEventListener('click', (e) => {
     if (e.target.closest('.list-handle')) return;
@@ -1015,64 +1125,28 @@ function funnelRow(funnel) {
     <span class="list-meta">${funnel.steps.length} step(s)</span>
   `;
 
-  // Drag inicia só pelo handle ≡ (drag em outras partes não tem efeito).
-  // Diferente de itemRow, funnelRow não tem fluxo "copy pro funil",
-  // então o mousedown só ativa a flag de reorder.
+  // Funnels só têm um modo de drag (reorder). mousedown fora do handle
+  // desarma → o dragstart cancela via preventDefault no callback armed.
   let dragArmed = false;
   row.querySelector('.list-handle').addEventListener('mousedown', () => { dragArmed = true; });
   row.addEventListener('mousedown', (e) => {
     if (!e.target.closest('.list-handle')) dragArmed = false;
   });
 
+  setupRowReorderDrag({
+    row,
+    dragType: 'text/zf-funnel-reorder-id',
+    persist: (ids) => storage.reorderFunnels(ids),
+    getRowId: (r) => r.dataset.funnelId,
+    isArmed: () => dragArmed,
+  });
+
+  // Cancela o drag se não foi pelo handle (não há legacy mode aqui)
   row.addEventListener('dragstart', (e) => {
-    if (!dragArmed) {
-      // Não armou pelo handle → cancela o drag (deixa o click funcionar)
-      e.preventDefault();
-      return;
-    }
-    e.dataTransfer.setData('text/zf-funnel-reorder-id', funnel.id);
-    e.dataTransfer.effectAllowed = 'move';
-    row.classList.add('list-row--dragging');
+    if (!dragArmed) e.preventDefault();
   });
-  row.addEventListener('dragend', () => {
-    dragArmed = false;
-    row.classList.remove('list-row--dragging');
-    row.classList.remove('list-row--dragover');
-  });
-  row.addEventListener('dragover', (e) => {
-    if (e.dataTransfer.types.includes('text/zf-funnel-reorder-id')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      row.classList.add('list-row--dragover');
-    }
-  });
-  row.addEventListener('dragleave', () => row.classList.remove('list-row--dragover'));
-  row.addEventListener('drop', async (e) => {
-    row.classList.remove('list-row--dragover');
-    const draggedId = e.dataTransfer.getData('text/zf-funnel-reorder-id');
-    if (!draggedId || draggedId === funnel.id) return;
-    e.preventDefault();
-    e.stopPropagation();
+  row.addEventListener('dragend', () => { dragArmed = false; });
 
-    const container = row.parentElement;
-    if (!container) return;
-    const allRows = Array.from(container.querySelectorAll('.list-row[data-funnel-id]'));
-    const orderedIds = allRows.map((r) => r.dataset.funnelId).filter(Boolean);
-    const fromIdx = orderedIds.indexOf(draggedId);
-    const toIdx = orderedIds.indexOf(funnel.id);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = orderedIds.splice(fromIdx, 1);
-    orderedIds.splice(toIdx, 0, moved);
-
-    try {
-      await storage.reorderFunnels(orderedIds);
-      renderList();
-    } catch (err) {
-      toast('Erro ao reordenar: ' + (err.message || err), 'error');
-    }
-  });
-
-  // Click → abrir modal de edição (handle não conta)
   row.addEventListener('click', (e) => {
     if (e.target.closest('.list-handle')) return;
     openFunnelModal(funnel);

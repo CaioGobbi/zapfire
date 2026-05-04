@@ -355,7 +355,8 @@ input, textarea { font-family: inherit; font-size: inherit; }
   align-items: center;
   gap: 12px;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: background 0.1s, border-color 0.1s, transform 0.18s ease;
+  /* will-change: transform — só durante o drag pra evitar overhead */
 }
 .list-row:hover {
   background: var(--bg-hover);
@@ -379,9 +380,16 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .list-handle:hover { color: var(--text); }
 .list-handle:active { cursor: grabbing; }
 
-/* Estados de drag — mesmo visual do step do funil */
-.list-row--dragging { opacity: 0.4; }
-.list-row--dragover { border-top: 2px solid var(--accent); }
+/* Drag-reorder com live-shift:
+   - .list-row--ghost: row sendo arrastado (fica fantasma no lugar
+     original; o ghost image do browser segue o cursor)
+   - irmãos shiftam via transform translateY no JS (não precisam de
+     classe — transition: transform na .list-row anima sozinho) */
+.list-row--ghost {
+  opacity: 0.35;
+  background: var(--bg-hover);
+  border-style: dashed;
+}
 
 .list-row--funnel { border-left-color: var(--type-funnel); }
 .list-row--text   { border-left-color: var(--type-text); }
