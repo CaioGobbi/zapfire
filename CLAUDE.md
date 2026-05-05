@@ -797,3 +797,47 @@ A implementar (Sprint 7):
 - Fingerprint de device mais forte (canvas + fonts + hardware)
 - Detecção de múltiplos IPs distintos pela mesma chave em janela curta
 - Possivelmente: encoding das chaves no cliente antes de enviar pro backend (dificulta sniffing via rede)
+
+
+## Infraestrutura (atualizada 05/05/2026)
+
+### Produção
+- **VPS:** Hostinger KVM 2 (Boston, Ubuntu 24.04 LTS)
+- **IP:** 2.24.71.239
+- **Hostname:** zapfire-vps
+- **Domínio:** zapfire.com.br
+
+### Endpoints
+- **API:** https://api.zapfire.com.br (backend Fastify)
+- **Painel:** https://app.zapfire.com.br (Next.js 14)
+- **Webhook Kirvano:** https://api.zapfire.com.br/api/v1/webhooks/kirvano
+- **Header de auth Kirvano:** `security-token` (lowercase, NÃO `X-Kirvano-Token`)
+
+### Stack
+- Docker Compose (postgres + backend + web)
+- Nginx reverse proxy + SSL Let's Encrypt
+- PostgreSQL 18 em volume persistente `/var/lib/zapfire/postgres`
+- Backups automáticos diários via cron 3h (retention 14d)
+- SSL auto-renewal via certbot.timer
+
+### Acesso
+- SSH: `ssh zapfire@2.24.71.239` (chave only, sem senha)
+- Postgres interno: `127.0.0.1:5432` (não exposto)
+- Backend: `127.0.0.1:3000` (não exposto)
+- Web: `127.0.0.1:3001` (não exposto)
+
+### Documentação
+- `CUTOVER_CHECKLIST.md` — checklist completo da migração
+- `~/zapfire/` na VPS — estrutura de deploy
+- `~/zapfire/repo/` na VPS — código clonado do GitHub
+
+### Histórico
+- **04/05/2026:** Provisionamento da VPS, hardening, Fase 1 completa
+- **05/05/2026:** Cutover para api. e app. (sem -novo). Migração concluída.
+
+### Débitos técnicos pós-migração
+- [ ] Forward email contato@zapfire.com.br → Gmail
+- [ ] Lint+TS desabilitados no build do painel (next.config.mjs)
+- [ ] Deploy key VPS é read-only (commits do PC apenas)
+- [ ] Limpar warnings cosméticos do nginx (http2 redefined)
+- [ ] Cancelar Railway + Vercel após 7 dias estáveis (12/05/2026)

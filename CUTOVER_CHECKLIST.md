@@ -87,3 +87,16 @@ docker compose up -d --force-recreate backend web
 - Limpar regra ufw 443 pra 443/tcp (cosmético)
 - Sprint 5 (Tracking + Daily Report)
 - Submissão Chrome Web Store
+
+# Status: ✅ CONCLUÍDO em 05/05/2026
+
+Migração Railway → VPS Hostinger Boston completada com sucesso.
+Todos os passos abaixo foram executados e validados.
+
+PIX_GENERATED real processado: ✅
+Reboot test passou: ✅
+
+Manter Railway + Vercel rodando até 12/05/2026 (7 dias) como rollback.
+Após confirmar estabilidade, executar passos da seção "7 dias depois".
+
+---
