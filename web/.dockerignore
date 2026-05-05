@@ -1,0 +1,39 @@
+# Dependências
+node_modules
+.pnp
+.pnp.js
+
+# Builds locais
+.next
+.next/cache
+out
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Env (vamos usar env_file no compose)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Outros
+README.md
+*.md
+coverage
+.nyc_output
