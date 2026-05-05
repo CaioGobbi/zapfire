@@ -10,6 +10,12 @@ export const metadata: Metadata = {
   },
   description: 'Gerencie sua assinatura, chave e dispositivos do Zapfire.',
   robots: { index: false, follow: false },
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    shortcut: '/icon.svg',
+  },
 };
 
 export default function RootLayout({
