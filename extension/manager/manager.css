@@ -252,6 +252,16 @@ input, textarea { font-family: inherit; font-size: inherit; }
 }
 .btn-danger:hover { background: var(--danger); color: white; }
 
+.btn-success {
+  background: transparent;
+  color: var(--success);
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  padding: 7px 14px;
+  transition: all 0.1s;
+}
+.btn-success:hover { background: var(--success); color: white; }
+
 /* ====== Grid (default list view — linhas) ====== */
 .grid {
   display: flex;
