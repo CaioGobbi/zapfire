@@ -124,3 +124,4 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
 export const apiGet = <T = unknown>(path: string) => api<T>(path, { method: 'GET' });
 export const apiPost = <T = unknown>(path: string, body?: unknown, auth = true) =>
   api<T>(path, { method: 'POST', body, auth });
+export const apiDelete = <T = unknown>(path: string) => api<T>(path, { method: 'DELETE' });

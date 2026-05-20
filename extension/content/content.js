@@ -321,6 +321,26 @@ function setActiveRunJids(jids) {
   updateFunnelIndicator();
 }
 
+// Gate central — bloqueia envios avulsos (chip/card/QuickSearch) pra
+// leads que já têm funil rodando. Evita overlap (lead recebendo
+// mensagens intercaladas) e double-trigger acidental.
+// Envios do próprio funil em execução carregam `fromRunId` no payload
+// (setado em makeAnchoredSender da sidebar) e passam direto.
+// Sem `msg.jid` = caminho legacy DOM (sem captura de JID); não gateamos
+// pra não regredir esse fallback.
+function checkLeadBusyGate(msg) {
+  if (msg && msg.fromRunId) return null;
+  if (!msg || !msg.jid) return null;
+  if (activeRunJids.has(msg.jid)) {
+    return {
+      ok: false,
+      error: 'Já tem um funil rodando pra essa conversa. Aguarde terminar ou cancele na tab Ativos.',
+      code: 'LEAD_BUSY',
+    };
+  }
+  return null;
+}
+
 function ensureIndicatorStyle() {
   if (indicatorStyleInjected) return;
   const style = document.createElement('style');
@@ -721,6 +741,8 @@ async function handleIframeMessage(event) {
     }
 
     case 'ZF_SEND_TEXT': {
+      const blocked = checkLeadBusyGate(msg);
+      if (blocked) { respond(blocked); return; }
       try {
         let result;
         if (msg.jid) {
@@ -740,6 +762,8 @@ async function handleIframeMessage(event) {
     }
 
     case 'ZF_SEND_MEDIA': {
+      const blocked = checkLeadBusyGate(msg);
+      if (blocked) { respond(blocked); return; }
       try {
         let result;
         if (msg.jid) {
@@ -770,6 +794,8 @@ async function handleIframeMessage(event) {
     }
 
     case 'ZF_SEND_AUDIO': {
+      const blocked = checkLeadBusyGate(msg);
+      if (blocked) { respond(blocked); return; }
       try {
         let result;
         if (msg.jid) {

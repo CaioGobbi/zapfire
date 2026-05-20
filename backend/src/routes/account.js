@@ -478,6 +478,56 @@ export default async function accountRoutes(fastify) {
   });
 
   // ====================================================
+  // DELETE /keys/:keyId/devices/:deviceId  (auth + ownership)
+  // ====================================================
+  // Remove um dispositivo específico (libera 1 slot do limite).
+  // Não toca no bind do número nem no counter de reset 1×/mês.
+  // ====================================================
+  fastify.delete(
+    '/keys/:keyId/devices/:deviceId',
+    { preHandler: authGuard },
+    async (request, reply) => {
+      const { keyId, deviceId } = request.params;
+
+      const key = await prisma.accessKey.findUnique({
+        where: { id: keyId },
+        select: { id: true, userId: true },
+      });
+      if (!key || key.userId !== request.user.id) {
+        return reply.code(404).send({ ok: false, code: 'KEY_NOT_FOUND' });
+      }
+
+      const device = await prisma.keyDevice.findUnique({
+        where: { id: deviceId },
+        select: { id: true, accessKeyId: true, deviceId: true, userAgent: true, ipAddress: true },
+      });
+      if (!device || device.accessKeyId !== keyId) {
+        return reply.code(404).send({ ok: false, code: 'DEVICE_NOT_FOUND' });
+      }
+
+      await prisma.keyDevice.delete({ where: { id: device.id } });
+
+      await prisma.auditLog.create({
+        data: {
+          userId: request.user.id,
+          action: 'key.device_removed',
+          entityType: 'KeyDevice',
+          entityId: device.id,
+          metadata: {
+            accessKeyId: keyId,
+            deviceFingerprint: device.deviceId,
+            userAgent: device.userAgent,
+            ipAddress: device.ipAddress,
+          },
+          ipAddress: getIp(request),
+        },
+      }).catch(() => {});
+
+      return reply.code(200).send({ ok: true });
+    }
+  );
+
+  // ====================================================
   // POST /keys/:id/reset-bind  (auth + ownership + regra 1x/mês)
   // ====================================================
   fastify.post('/keys/:id/reset-bind', { preHandler: authGuard }, async (request, reply) => {

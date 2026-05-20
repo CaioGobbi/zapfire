@@ -649,10 +649,14 @@ function makeAnchoredSender(target, runId) {
     // disparada no onRunProgress quando o engine entra em waiting.
     // Aqui só executa o send em si.
 
+    // fromRunId é o "selo" que diz ao gate em content.js que esse
+    // envio veio do funil rodando (e portanto não deve ser bloqueado
+    // pelo gate de "lead com funil ativo").
     if (item.type === 'text') {
       return await callParent('ZF_SEND_TEXT', {
         jid: target.jid,
         text: item.content,
+        fromRunId: runId,
       });
     }
 
@@ -665,6 +669,7 @@ function makeAnchoredSender(target, runId) {
         blob: item.content,
         caption: item.caption || '',
         mediaType: item.type,
+        fromRunId: runId,
       });
     }
 
@@ -675,6 +680,7 @@ function makeAnchoredSender(target, runId) {
       return await callParent('ZF_SEND_AUDIO', {
         jid: target.jid,
         blob: item.content,
+        fromRunId: runId,
       });
     }
 
@@ -727,6 +733,23 @@ async function handleRunFunnel(funnel) {
     return;
   }
   const target = idResult.target;
+
+  // Gate de funil duplicado pro mesmo lead. Bloqueia disparo de
+  // qualquer funil enquanto já tem outro rodando pra mesma conversa
+  // (evita lead recebendo 2 sequências intercaladas).
+  // O check + state.activeRuns.set abaixo rodam síncronamente — não há
+  // await entre eles, então cliques múltiplos em sequência não dão race.
+  if (target.jid) {
+    for (const r of state.activeRuns.values()) {
+      if (r.target && r.target.jid === target.jid) {
+        globalToast(
+          `Já tem o funil "${r.funnelName}" rodando pra essa conversa. Cancele na tab Ativos antes de iniciar outro.`,
+          'warning'
+        );
+        return;
+      }
+    }
+  }
 
   // Cria o run ID antes pra poder passar pro sender ancorado
   // (que precisa checar cancellation durante retries longos)

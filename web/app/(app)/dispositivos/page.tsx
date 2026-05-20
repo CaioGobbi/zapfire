@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Smartphone, Laptop, Globe, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Smartphone, Laptop, Globe, RotateCcw, AlertTriangle, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,7 +14,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { apiGet, apiPost, apiDelete, ApiError } from '@/lib/api';
 import { formatDateTime, maskPhone } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -52,6 +52,8 @@ export default function DispositivosPage() {
   const [loading, setLoading] = useState(true);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<DevicesResponse['devices'][number] | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   async function reload() {
     const keysRes = await apiGet<KeysResponse>('/account/keys');
@@ -98,6 +100,22 @@ export default function DispositivosPage() {
     }
   }
 
+  async function onConfirmRemove() {
+    if (!key || !removeTarget) return;
+    setRemoving(true);
+    try {
+      await apiDelete(`/account/keys/${key.id}/devices/${removeTarget.id}`);
+      toast.success('Dispositivo removido. Se ele continuar conectado, vai reaparecer no próximo uso.');
+      setRemoveTarget(null);
+      await reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Falha ao remover — tente de novo';
+      toast.error(msg);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -121,7 +139,7 @@ export default function DispositivosPage() {
       ) : (
         <>
           <BindCard k={key} onClickReset={() => setResetOpen(true)} />
-          <DevicesCard devices={devices} />
+          <DevicesCard devices={devices} onRequestRemove={setRemoveTarget} />
         </>
       )}
 
@@ -131,6 +149,13 @@ export default function DispositivosPage() {
         k={key}
         resetting={resetting}
         onConfirm={onConfirmReset}
+      />
+
+      <RemoveDeviceDialog
+        device={removeTarget}
+        onOpenChange={(v) => !v && setRemoveTarget(null)}
+        removing={removing}
+        onConfirm={onConfirmRemove}
       />
     </div>
   );
@@ -197,7 +222,13 @@ function BindCard({
 }
 
 // ============================================================
-function DevicesCard({ devices }: { devices: DevicesResponse['devices'] }) {
+function DevicesCard({
+  devices,
+  onRequestRemove,
+}: {
+  devices: DevicesResponse['devices'];
+  onRequestRemove: (d: DevicesResponse['devices'][number]) => void;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -219,6 +250,7 @@ function DevicesCard({ devices }: { devices: DevicesResponse['devices'] }) {
                 <TableHead>Navegador</TableHead>
                 <TableHead className="hidden sm:table-cell">IP</TableHead>
                 <TableHead>Último uso</TableHead>
+                <TableHead className="w-[60px]" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -238,6 +270,17 @@ function DevicesCard({ devices }: { devices: DevicesResponse['devices'] }) {
                   <TableCell className="text-muted-foreground">
                     {formatDateTime(d.lastSeenAt)}
                   </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => onRequestRemove(d)}
+                      title="Remover este dispositivo"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -245,6 +288,50 @@ function DevicesCard({ devices }: { devices: DevicesResponse['devices'] }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ============================================================
+function RemoveDeviceDialog({
+  device,
+  onOpenChange,
+  removing,
+  onConfirm,
+}: {
+  device: DevicesResponse['devices'][number] | null;
+  onOpenChange: (v: boolean) => void;
+  removing: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={!!device} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remover este dispositivo?</DialogTitle>
+          <DialogDescription className="pt-2 space-y-2">
+            <div>
+              <strong className="text-foreground">{summarizeUserAgent(device?.userAgent || null)}</strong>
+              {device?.ipAddress && (
+                <span className="text-muted-foreground"> · {device.ipAddress}</span>
+              )}
+            </div>
+            <div className="text-muted-foreground text-sm">
+              Isso libera 1 slot do limite de 4 dispositivos. Se o Chrome desse dispositivo
+              continuar conectado com a chave, ele vai reaparecer no próximo uso —
+              só faz sentido remover algo que você não usa mais ou não reconhece.
+            </div>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={removing}>
+            Cancelar
+          </Button>
+          <Button onClick={onConfirm} disabled={removing}>
+            {removing ? 'Removendo…' : 'Remover'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
