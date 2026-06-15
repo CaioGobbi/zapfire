@@ -407,6 +407,12 @@ function itemPreview(item) {
     audio.preload = 'none';
     audio.style.cssText = 'width: 100%; height: 32px;';
     audio.src = URL.createObjectURL(item.content);
+    // Espelha o padrão de image/video acima: revoga URL após o load
+    // pra não vazar no registry do documento em re-renders sucessivos
+    // (renderList dispara a cada send, tab switch, filter change).
+    // preload='none' garante que loadeddata só dispara no play do
+    // usuário — seguro revogar antes disso só na linha de imagens.
+    audio.onloadeddata = () => URL.revokeObjectURL(audio.src);
     return audio;
   }
   preview.textContent = item.mimeType || '(sem preview)';
