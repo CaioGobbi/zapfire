@@ -90,6 +90,44 @@ function openDB() {
 }
 
 // ------------------------------------------------------------
+// Storage persistente — proteção contra eviction
+// ------------------------------------------------------------
+// IndexedDB default é "best-effort": browser pode evictar sob pressão
+// de disco, quota global, "Clear browsing data", etc. Áudios/mídias
+// do Zapfire facilmente passam de 500MB no IndexedDB do cliente —
+// Opera GX em particular é mais agressivo com eviction de storage de
+// extensão. Pedir persistência transforma em "best-effort durável":
+// só some se o user desinstalar a extensão.
+//
+// Idempotente. Sem prompt visível pro user em contexto de extensão
+// (Chromium concede automaticamente baseado em "last used time").
+// Falha silenciosamente em browsers que não suportam (volta pro
+// modo padrão sem quebrar nada).
+let persistRequested = false;
+export async function requestPersistentStorage() {
+  if (persistRequested) return true;
+  persistRequested = true;
+  try {
+    if (!navigator.storage || typeof navigator.storage.persist !== 'function') {
+      return false;
+    }
+    if (typeof navigator.storage.persisted === 'function') {
+      const already = await navigator.storage.persisted();
+      if (already) {
+        console.log('[Zapfire][storage] Persistent storage já concedido');
+        return true;
+      }
+    }
+    const granted = await navigator.storage.persist();
+    console.log('[Zapfire][storage] Persistent storage:', granted ? 'CONCEDIDO' : 'NEGADO');
+    return granted;
+  } catch (e) {
+    console.warn('[Zapfire][storage] Falha pedindo persistent storage:', e.message);
+    return false;
+  }
+}
+
+// ------------------------------------------------------------
 // Helper genérico — envolve uma operação numa Promise
 // ------------------------------------------------------------
 function tx(storeName, mode, fn) {

@@ -582,12 +582,57 @@ Bloco focado em deixar o produto pronto pra primeira submissão na Chrome Web St
 - **`PasswordInput` reutilizável com Eye/EyeOff toggle** — mesmo componente compartilhado em login, primeiro-acesso, dialog admin. Mantém `<Input>` shadcn como fonte da verdade pro estilo, só envelopa com state interno `show` que alterna entre `type="password"` e `type="text"`. Padding-right 10 pra acomodar o botão absoluto
 - **Admin: dialog "Credenciais" combinando email + senha** — em vez de 2 botões separados ("Mudar email" e "Definir senha"), 1 botão "Credenciais" abre dialog com 2 seções independentes, cada uma com seu próprio botão de aplicar. UX mais limpa e o user-detail header já tem 4 botões (Nova chave / Credenciais / Magic link / Mudar role) — adicionar 1 a mais pioraria
 
+### 0.4.5 — Audio pipeline overhaul (root cause fix dos bugs iPhone/funil dup)
+
+Pacote coordenado de 12 fixes que ataca a causa raiz das reclamações de áudio reportadas pelos afiliados (iPhone "Este áudio não está mais disponível", "mostra enviado e some", "spinner trava precisa F5", "funil duplicado"). Auditoria adversarial via workflow de 117 agentes confirmou 15 findings reais (85 refutados) e mapeou 3 famílias técnicas, não 5 bugs independentes. Recomendação foi não subir 0.4.4 isolado — ela cobria só 1 dos 3 vetores do bug iPhone.
+
+**Novo módulo [`extension/lib/audio-config.js`](extension/lib/audio-config.js)** — constantes canonicas únicas pra evitar landmine de inconsistência (manager.js usava `'audio/ogg;codecs=opus'` sem espaço, resto do código com espaço; comparações estritas falhavam silenciosamente):
+- `PTT_MIME = 'audio/ogg; codecs=opus'` (com espaço, padrão Baileys/WPP)
+- `PTT_SAMPLE_RATE = 16000`, `PTT_CHANNELS = 1`, `PTT_BITRATE = 24000` (spec canonical WhatsApp VOIP)
+- `isOggOpusMime()` — tolerante a `'audio/ogg'`, `'audio/ogg;codecs=opus'`, `'audio/ogg+opus'` (typo), case variations
+- `isOggBlobReal()` — sniff binário dos primeiros 4 bytes (`OggS` magic) — mais confiável que mimetype declarado, que pode mentir
+- `needsReconvert()` — classifier rápido pra UI (sem ler blob): item áudio com `pttCompat !== 1`
+
+**[`manager.js`](extension/manager/manager.js) — `convertToOggOpus` refator profundo**:
+- `new AudioContext({ sampleRate: 16000 })` explícito (antes herdava 48kHz do device → arquivos 3-4× maiores, iPhone rejeitava)
+- `MediaStreamDestination` com `channelCount: 1` + `channelCountMode: 'explicit'` (downmix mono garantido)
+- `audioBitsPerSecond: 24000` (PTT_BITRATE) — sweet spot pra voz humana
+- **Promise.race com timeout** = `(duration × 1.5) + 5s` mínimo 10s — antes hangava forever quando `source.onended` ou `recorder.onstop` não disparavam (autoplay policy suspendendo ctx, WASM falhando silencioso) → manager travava no spinner do dropzone, fix do Bug C
+- **`decodeAudioData` com timeout 30s** — arquivos corrompidos não travam mais o flow inteiro
+- **try/finally global**: `ctx.close()` + `recorder.stop()` em todos os paths de erro (sem leak de AudioContext)
+
+**[`manager.js`](extension/manager/manager.js) — catch silencioso REMOVIDO**: o antigo fallback "salvando original (waveform simples)" era mentira — salvava MP3/WAV cru como `type='audio'`, depois `injected.js` forçava mimetype `'audio/ogg; codecs=opus'` embrulhando bytes MP3 → iPhone rejeitava o codec mismatch → "Este áudio não está mais disponível". Agora: toast erro explícito + abortar save (limpa `draft.content`). Cliente é forçado a tentar outro arquivo ou já em OGG Opus
+
+**[`manager.js`](extension/manager/manager.js) — sniff binário no upload**: se o user arrasta um arquivo já em OGG Opus, agora **confirma com `isOggBlobReal()`** dos primeiros 4 bytes (`OggS`) antes de aceitar sem conversão. Mimetype declarado pode mentir — bytes não
+
+**[`injected.js`](extension/main-world/injected.js) — `computeWaveform` try/finally**: antes vazava AudioContext em qualquer falha de `decodeAudioData` (áudio corrompido, MP3 com mimetype mentiroso). Chrome cap = ~6 contexts simultâneos por aba → após ~6 falhas, **todos os PTTs subsequentes saíam com `waveform=undefined` silenciosamente** (injected.js passa `undefined` sem warning). iPhone sem waveform + container suspeito = "não disponível". Fix de 4 linhas resolve problema invisível que vinha contribuindo pro Bug A
+
+**[`injected.js`](extension/main-world/injected.js) — `waitForAck: false` nos paths PTT**: era inconsistência não-documentada — `sendTextMessage` linha 144 passava explícito, `sendVoiceMessage`/`sendFileMessage` PTT (244 e 254) NÃO. Default do WPP é `true` → promise pendurava esperando ack server-side por 35-60s, callInjectedApi (60s) ou callParent (30s) timeout → UI marcava falha enquanto WA entregava async → contribuía pra Bug B ("mostra enviado e some") e Bug C ("spinner trava"). Agora resolve no enqueue local. **Trade-off conhecido**: falhas reais server-side ficam invisíveis até Sprint 9 implementar `WPP.on('msg.ack')` tracking
+
+**[`sidebar.js`](extension/sidebar/sidebar.js) — race em `handleRunFunnel`** (Bug E): comentário original afirmava "check + set síncronos — não tem await entre eles" mas era falso — havia `await callParent('ZF_GET_CHAT_ID')` ANTES do gate de duplicidade. 3 entry points concorrentes (runBtn click, ZF_RUN_FUNNEL_FROM_QB do quickbar, ZF_QS_RUN_FUNNEL do QuickSearch) entravam no await em paralelo, todos liam Map vazio quando resolve, todos faziam `.set()` → lead recebia 2 sequências intercaladas. Fix: `state.startingFunnels = new Set()` adicionado **síncronamente** no início do handler, removido no `finally`. Cleanup garantido em throw síncrono, gate de duplicidade, etc
+
+**[`sidebar.js`](extension/sidebar/sidebar.js) — `callParent` timeout configurável**: antes era 30s hardcoded pra tudo, criando zona morta com content.js que usa 60s pra SEND_FILE → sidebar rejeitava com "Timeout" enquanto envio seguia rolando, response tardia ignorada silenciosamente (pendingRequests já deletado). Agora `TIMEOUT_BY_TYPE` map: ZF_SEND_MEDIA/AUDIO = 90s, ZF_SEND_TEXT = 30s, ZF_GET_CHAT_ID = 5s, etc. Cobre uploads grandes (vídeo 5MB+) em rede média sem falso-timeout
+
+**[`funnel-engine.js`](extension/lib/funnel-engine.js) — `try/catch` em `incrementItemUses`**: antes `await incrementItemUses(item.id)` sem proteção. Se IndexedDB falhar (quota cheia, schema upgrade), throw escapava do for, `activeRuns.delete` não rodava, `onRunFinish` não disparava, run ficava zumbi permanente até `reconcileOrphanRuns` rodar 24h depois. Contador de uses não é crítico — perder 1 contagem ok, fluxo continuar é mandatório
+
+**[`backup.js`](extension/lib/backup.js) — regex robusto + import PTT_MIME**: antes `/^audio\/ogg(\s*;)?$/i` só pegava variantes simples. Agora detecta `audio/ogg` puro, `audio/ogg;codec=opus` (typo), `audio/ogg+opus`, qualquer variante OGG sem codecs=opus canonical → re-envelopa pra `PTT_MIME` constante. **Não seta `pttCompat=1`** — encoding pode ser 48kHz stereo, fica pra batch reconvert pegar
+
+**[`audio-reconvert.js`](extension/lib/audio-reconvert.js) (NOVO) + banner UI no manager** — fix retroativo pra biblioteca contaminada. Toda vez que o manager abre, conta items áudio sem `pttCompat=1` (legacy: importados de ZapVoice, salvos pré-0.4.5, ou MP3/WAV que catch silencioso aceitou). Se > 0, banner azul no topo: **"Atualização disponível pra X áudios — Atualizar agora"**. Click roda batch sequencial: cada blob → `decodeAudioData` (Chrome decode MP3, WAV, OGG mal-encodado) → reencode 16kHz mono via `convertToOggOpus` → save de volta com `pttCompat=1`. **Sem reupload pelo cliente.** Áudios velhos ficam compatíveis com iPhone retroativamente. Estado persiste em `meta('reconvert.state')` — cliente pode fechar a aba mid-batch, próxima abertura retoma. Falhas marcam item com `pttBroken: true` (UI pode exibir badge no futuro). Throttle de progress render a 150ms
+
+**[`manager.js`](extension/manager/manager.js) — banner storage health** + quota: `navigator.storage.persist()` retorno agora é checado (antes descartado em fire-and-forget). Negado → banner warning "Storage não está protegido — exporte backup pelo menos uma vez por semana". `navigator.storage.estimate()` adicional — banner quando usage > 80% quota. Sistema de alerts no header (`#header-alerts`) compartilhado pra futuras notificações não-modais
+
+**Build:** [`extension/dist/zapfire-extension-0.4.5.zip`](extension/dist/zapfire-extension-0.4.5.zip) (~445 KB, 17 arquivos JS minificados — +2 vs 0.4.4 são os módulos novos `audio-config.js` e `audio-reconvert.js`)
+
 ## Próximos Sprints
 
 - **Sprint 8:** Capturar screenshots + design do small promo tile (440x280). Submeter pra Chrome Web Store. Comprar domínio `zapfire.com.br`, configurar DNS (painel no Vercel como `app.zapfire.com.br`, backend no Railway como `api.zapfire.com.br`), atualizar env vars e redeploy. Verificar domínio no Resend (SPF+DKIM) pra enviar email real do `contato@zapfire.com.br`. Definir preço final do `pro_v1` + criar oferta na Kirvano + adicionar offer_id em `kirvanoParser.js` (PRO_OFFER_IDS)
 - **Gatilhos por palavra-chave (Sprint futuro):** hookar mensagens recebidas via WPP/store listener; quando match, enviar resposta automática do item associado. Originalmente era "Sprint 5", virou "Sprint 5.5 ou outro" depois que Sprint 5 virou tracking
 
 ### Débito técnico conhecido
+- **`waitForAck: false` mascara falhas reais de servidor** (Sprint 9): por ora `ok: true` significa "enqueue local OK", não "WA confirmou entrega". Sprint 9 precisa subscribir em `WPP.on('msg.ack')` ou polling `WPP.chat.getMessageById` com timeout 15s pra UI refletir estado real. Sem isso, funil pode reportar 100% completed sem mensagem chegar (WA Web com socket degradado)
+- **opus-media-recorder abandonado há 6 anos** (Sprint 9 POC WebCodecs): `kbumsik/opus-media-recorder` sem release desde 2020, issues abertos sobre sample rate fixo, OGG corrompido, channels fixos. Funciona pro caso atual mas é risco. POC: `AudioEncoder` nativo do Chrome 94+ com `OpusBitstreamFormat='ogg'` + `signal='voice'` resolve sampleRate/channels nativos, remove ~700KB de bundle, sem WASM, sem CSP `wasm-unsafe-eval`. 8-12h POC, 4-8h migration. Migração full em 0.6.0 se POC OK
+- **wa-js 3.23.4 → 4.x não traz ganhos mensuráveis** (re-avaliar quando 4.4+): zero fixes em sendVoiceMessage/sendFileMessage/PTT/iOS entre 3.23.4 e 4.3.0, breaking change cosmético (loader rename), issue #3419 (module finders quebrados em WA Web update) seguia aberto na 4.x. Esperar 4.4+ é justificado
+- **Sem telemetria de envios em prod**: hoje só descobrimos bugs via reclamação no WhatsApp do Melfi. Sprint 9 instrumentar opt-in tracking client-side (timeout, decode_failure, ack_pending, mimetype_invalid) postado pro backend `audit_logs`
 - opus-media-recorder tem ~700KB combinado (UMD + WASM) — poderia ser lazy-loaded só quando usuário abre modal de áudio
 - Fallback DOM em `lib/sender.js` ainda existe — pode ser removido quando envio via API for 100% estável
 - Conversão OGG bloqueia UI do manager durante o upload — desde 0.2.0 mostra spinner roxo no dropzone e desabilita save, mas o thread principal ainda trava (opus-media-recorder roda playback realtime). Async/progress real seria via worker dedicado

@@ -31,6 +31,8 @@ import {
   // completos (com blob) pra despachar envio
   getItem,
   getFunnel,
+  // Proteção contra eviction do IndexedDB (Opera GX / Chrome sob disk pressure)
+  requestPersistentStorage,
 } from '../lib/storage.js';
 import { runFunnel } from '../lib/funnel-engine.js';
 // Sprint 5 — wrapper que registra runs em funnel_runs quando o funil
@@ -58,6 +60,13 @@ const state = {
   // RunInfo: { runId, funnelId, funnelName, totalSteps, target, cancel,
   //            phase, current, status, progressPct, countdownTimer }
   activeRuns: new Map(),
+  // 0.4.5 — lock síncrono de funis em fase de inicialização. Set<funnelId>
+  // adicionado ANTES do await ZF_GET_CHAT_ID, removido no finally. Fecha
+  // a janela de race onde 2 cliques rápidos (sidebar+quickbar, double-click)
+  // passavam ambos pelo gate de duplicidade antes do primeiro ter chance
+  // de registrar no activeRuns. Sem essa, lead recebia 2 sequências
+  // intercaladas do mesmo funil.
+  startingFunnels: new Set(),
   // Sprint 4 — estado da licença (atualizado via chrome.storage.onChanged).
   // null = ainda não carregou (permissivo até primeiro validate).
   license: null,
@@ -84,18 +93,34 @@ const TAB_LABELS = {
 // ------------------------------------------------------------
 const pendingRequests = new Map();
 
-function callParent(type, payload = {}) {
+// Timeout default por tipo de mensagem — antes era 30s hardcoded
+// pra tudo, gerando zona morta com o content.js que usa 60s pra
+// SEND_FILE. Resultado: sidebar rejeitava com "Timeout" mas o WPP
+// continuava enviando — UI marcava falha enquanto WA entregava
+// ~10s depois, usuário re-tentava → mensagem duplicada.
+const TIMEOUT_BY_TYPE = {
+  ZF_SEND_MEDIA: 90_000,
+  ZF_SEND_AUDIO: 90_000,
+  ZF_SEND_TEXT: 30_000,
+  ZF_QS_SEND_ITEM: 90_000,
+  ZF_GET_CHAT_ID: 5_000,
+  ZF_QUERY_CHAT_STATE: 5_000,
+  ZF_OPEN_CHAT_BY_JID: 10_000,
+  ZF_SWITCH_CHAT: 10_000,
+};
+
+function callParent(type, payload = {}, timeoutMs) {
+  const effectiveTimeout = timeoutMs || TIMEOUT_BY_TYPE[type] || 30_000;
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
     pendingRequests.set(requestId, { resolve, reject });
     window.parent.postMessage({ type, requestId, ...payload }, '*');
-    // Timeout 30s
     setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         pendingRequests.delete(requestId);
         reject(new Error('Timeout aguardando content script'));
       }
-    }, 30_000);
+    }, effectiveTimeout);
   });
 }
 
@@ -726,30 +751,48 @@ async function handleRunFunnel(funnel) {
     return;
   }
 
-  // Captura a identidade do chat aberto (vai ancorar o funil)
-  const idResult = await callParent('ZF_GET_CHAT_ID');
-  if (!idResult || !idResult.ok || !idResult.target) {
-    toast('Não consegui identificar a conversa aberta', 'error');
+  // Lock SÍNCRONO de start. Evita race quando 2 entry points disparam
+  // o mesmo funil quase simultâneos (sidebar click + quickbar, ou
+  // double-click no Executar) — ambos entrariam no await ZF_GET_CHAT_ID
+  // em paralelo, leriam activeRuns vazio quando resolve, e fariam .set()
+  // 2 vezes → lead recebia sequência dobrada.
+  if (state.startingFunnels.has(funnel.id)) {
+    globalToast('Esse funil já tá iniciando — aguarde.', 'warning');
     return;
   }
-  const target = idResult.target;
+  state.startingFunnels.add(funnel.id);
 
-  // Gate de funil duplicado pro mesmo lead. Bloqueia disparo de
-  // qualquer funil enquanto já tem outro rodando pra mesma conversa
-  // (evita lead recebendo 2 sequências intercaladas).
-  // O check + state.activeRuns.set abaixo rodam síncronamente — não há
-  // await entre eles, então cliques múltiplos em sequência não dão race.
-  if (target.jid) {
-    for (const r of state.activeRuns.values()) {
-      if (r.target && r.target.jid === target.jid) {
-        globalToast(
-          `Já tem o funil "${r.funnelName}" rodando pra essa conversa. Cancele na tab Ativos antes de iniciar outro.`,
-          'warning'
-        );
-        return;
+  let target;
+  try {
+    // Captura a identidade do chat aberto (vai ancorar o funil)
+    const idResult = await callParent('ZF_GET_CHAT_ID');
+    if (!idResult || !idResult.ok || !idResult.target) {
+      toast('Não consegui identificar a conversa aberta', 'error');
+      return;
+    }
+    target = idResult.target;
+
+    // Gate de funil duplicado pro mesmo lead. Bloqueia disparo de
+    // qualquer funil enquanto já tem outro rodando pra mesma conversa
+    // (evita lead recebendo 2 sequências intercaladas).
+    if (target.jid) {
+      for (const r of state.activeRuns.values()) {
+        if (r.target && r.target.jid === target.jid) {
+          globalToast(
+            `Já tem o funil "${r.funnelName}" rodando pra essa conversa. Cancele na tab Ativos antes de iniciar outro.`,
+            'warning'
+          );
+          return;
+        }
       }
     }
+  } finally {
+    // Libera o lock síncrono. A partir daqui o run já tá registrado
+    // em activeRuns (mais embaixo), que serve de lock pros próximos.
+    // Cleanup roda mesmo em throw síncrono no callParent ou no toast.
+    state.startingFunnels.delete(funnel.id);
   }
+  if (!target) return;
 
   // Cria o run ID antes pra poder passar pro sender ancorado
   // (que precisa checar cancellation durante retries longos)
@@ -942,6 +985,11 @@ function setActiveTab(tab) {
 // Bootstrap
 // ------------------------------------------------------------
 async function init() {
+  // Best-effort: pede storage persistente pra que o browser não evict
+  // o IndexedDB (Opera GX é especialmente agressivo nisso). Não bloqueia
+  // o resto do init — roda async.
+  requestPersistentStorage();
+
   const lastTab = await getMeta('lastTab', 'text');
   if (TAB_FILTERS[lastTab]) state.activeTab = lastTab;
 

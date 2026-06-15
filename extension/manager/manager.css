@@ -1738,3 +1738,89 @@ dialog::backdrop {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ============================================================
+   Header alerts (0.4.5) — banners não-modais no topo do manager
+   ============================================================ */
+.header-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+.header-alerts:empty,
+.header-alerts[hidden] { display: none; }
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.alert-body { flex: 1; }
+.alert-title { font-weight: 700; margin-bottom: 2px; }
+.alert-sub { color: var(--text-dim); font-size: 13px; }
+
+.alert-warning {
+  background: rgba(255, 107, 0, 0.08);
+  border-color: rgba(255, 107, 0, 0.35);
+  color: var(--text);
+}
+.alert-warning .alert-icon { color: var(--warning); }
+
+.alert-info {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--text);
+}
+.alert-info .alert-icon { color: var(--type-text); }
+
+.alert-action {
+  background: var(--text);
+  color: var(--bg);
+  border: 0;
+  padding: 8px 14px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.alert-action:hover { background: #fff; }
+.alert-action:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.alert-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.alert-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.alert-progress-fill {
+  height: 100%;
+  background: var(--type-text);
+  width: 0;
+  transition: width 0.2s ease-out;
+}
+.alert-progress-text { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.alert-dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  line-height: 0;
+}
+.alert-dismiss:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }

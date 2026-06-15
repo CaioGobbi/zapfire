@@ -160,13 +160,19 @@
   async function computeWaveform(blob) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
+    // Chrome limita ~6 AudioContexts simultâneos por aba. O catch
+    // antigo deixava ctx vazado em qualquer falha de decodeAudioData
+    // (áudio importado mal-encodado, MP3 com mimetype mentiroso) — após
+    // ~6 falhas, todo PTT subsequente saía com waveform=null silencioso,
+    // gatilho invisível pro iPhone rejeitar como "não disponível".
+    // try/finally garante close em todos os paths.
+    let ctx = null;
     try {
-      const ctx = new AC();
+      ctx = new AC();
       const arrayBuf = await blob.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
       const samples = audioBuf.getChannelData(0);
 
-      // WA usa 64 bytes, cada byte = RMS do bucket escalado pra 0-100
       const BARS = 64;
       const step = Math.max(1, Math.floor(samples.length / BARS));
       const waveform = new Uint8Array(BARS);
@@ -184,17 +190,19 @@
         rmsBuckets[i] = rms;
         if (rms > maxRms) maxRms = rms;
       }
-      // Normaliza pelo pico RMS (não pelo pico de amostra)
       const norm = maxRms > 0 ? 100 / maxRms : 1;
       for (let i = 0; i < BARS; i++) {
         waveform[i] = Math.min(100, Math.round(rmsBuckets[i] * norm));
       }
 
-      try { ctx.close(); } catch (_) {}
       return waveform;
     } catch (e) {
       console.warn(LOG, 'waveform compute failed:', e.message);
       return null;
+    } finally {
+      if (ctx) {
+        try { ctx.close(); } catch (_) {}
+      }
     }
   }
 
@@ -211,11 +219,19 @@
     const targetJid = normalizeJid(jid);
     const fname = filename || blob.name || `zapfire-${Date.now()}`;
 
+    // PTT exige mimetype EXATO 'audio/ogg; codecs=opus' senão Android
+    // rejeita o codec — remetente não consegue ouvir, destinatário também
+    // não. Áudios importados do ZapVoice (backup 3.0.0) vêm como
+    // 'audio/ogg' puro, e File constructor herda esse type — daí o bug.
+    // Bytes binários já são OggS válidos, só precisa declarar o codec.
+    const pttMime = 'audio/ogg; codecs=opus';
+    const effectiveType = isPtt ? pttMime : (blob.type || 'audio/mpeg');
+
     // Normaliza pra File — o blob do IndexedDB vem como Blob puro
     // (sem .name), WPP pode tratar diferente de um File legit.
-    const fileForSend = blob instanceof File
+    const fileForSend = blob instanceof File && (!isPtt || blob.type === pttMime)
       ? blob
-      : new File([blob], fname, { type: blob.type || 'audio/mpeg' });
+      : new File([blob], fname, { type: effectiveType });
 
     // ---- PTT: usa sendVoiceMessage (helper especializado) + waveform ----
     if (isPtt) {
@@ -230,11 +246,17 @@
         ? `Uint8Array [${Array.from(waveform).slice(0, 8).join(',')}...] (${waveform.length} bytes)`
         : 'NULL (decode falhou)');
 
-      // sendVoiceMessage é o caminho preferido pra PTT
+      // sendVoiceMessage é o caminho preferido pra PTT.
+      // waitForAck:false — não pendura aguardando ack server-side
+      // (sendText na linha 144 já faz isso; PTT/file não fazia, era
+      // inconsistência não-documentada). Promise resolve no enqueue
+      // local. Falhas reais de server-side ficam invisíveis pro user
+      // até Sprint 9 implementar WPP.on('msg.ack') tracking.
       if (typeof window.WPP.chat.sendVoiceMessage === 'function') {
         try {
           const result = await window.WPP.chat.sendVoiceMessage(targetJid, fileForSend, {
             waveform: waveform || undefined,
+            waitForAck: false,
           });
           return { ok: true, id: result?.id?._serialized, ack: result?.ack, via: 'sendVoiceMessage', hadWaveform: !!waveform };
         } catch (e) {
@@ -247,8 +269,9 @@
         type: 'audio',
         isPtt: true,
         filename: fname,
-        mimetype: blob.type || 'audio/mpeg',
+        mimetype: pttMime,
         waveform: waveform || undefined,
+        waitForAck: false,
       });
       return { ok: true, id: result?.id?._serialized, ack: result?.ack, via: 'sendFileMessage-ptt', hadWaveform: !!waveform };
     }

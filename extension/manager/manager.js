@@ -14,6 +14,19 @@ import * as storage from '../lib/storage.js';
 import * as backup from '../lib/backup.js';
 import { reconcileOrphanRuns } from '../lib/funnel-tracker.js';
 import { generateReportText, groupRunsByFunnel } from '../lib/report-template.js';
+import {
+  PTT_MIME,
+  PTT_SAMPLE_RATE,
+  PTT_CHANNELS,
+  PTT_BITRATE,
+  isOggOpusMime,
+  isOggBlobReal,
+  needsReconvert,
+} from '../lib/audio-config.js';
+import {
+  countLegacyAudios,
+  reconvertLegacyAudios,
+} from '../lib/audio-reconvert.js';
 import { PANEL_URL } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1332,37 +1345,56 @@ async function handleFileSelected(file) {
     }
   }
 
-  // Áudio: converte pra OGG/Opus REAL pra ter waveform correto no
-  // PTT do WhatsApp. Usa opus-media-recorder (polyfill WASM) — o
-  // MediaRecorder nativo do Chrome só produz WebM (WA rejeita).
-  if (draft.type === 'audio' && !isOggOpus(file)) {
-    setDropzoneLoading(true);
-    try {
-      const opus = await convertToOggOpus(file);
-      draft.content = opus;
-      draft.mimeType = opus.type;
-      draft.size = opus.size;
-      draft.duration = await getMediaDuration(opus, 'audio');
-      toast(`✓ Áudio convertido — ${formatSize(opus.size)}`, 'success');
-    } catch (e) {
-      console.warn('Conversão OGG falhou:', e);
-      toast('Conversão falhou, salvando original (waveform simples)', 'warning');
+  // Áudio: converte pra OGG/Opus REAL (16kHz mono, spec canonical
+  // do PTT do WhatsApp). MP3/WAV cru NÃO É ACEITO — iPhone valida
+  // codec estrito e mostra "Este áudio não está mais disponível"
+  // se receber MP3 embrulhado como OGG (bug que era mascarado pelo
+  // catch silencioso pre-0.4.5).
+  if (draft.type === 'audio') {
+    // Áudio já em OGG Opus declarado? Confirma com sniff binário
+    // dos primeiros 4 bytes ('OggS'). Mimetype declarado pode mentir;
+    // bytes não. Se passar, salva direto com pttCompat:1.
+    const alreadyOgg = isOggOpusMime(file.type) && await isOggBlobReal(file);
+    if (alreadyOgg) {
       draft.content = file;
-      draft.mimeType = file.type;
+      draft.mimeType = PTT_MIME;
       draft.size = file.size;
       draft.duration = await getMediaDuration(file, 'audio');
-    } finally {
-      setDropzoneLoading(false);
+      draft.pttCompat = 1;
+    } else {
+      setDropzoneLoading(true);
+      try {
+        const opus = await convertToOggOpus(file);
+        draft.content = opus;
+        draft.mimeType = PTT_MIME;
+        draft.size = opus.size;
+        draft.duration = await getMediaDuration(opus, 'audio');
+        draft.pttCompat = 1;
+        toast(`✓ Áudio convertido — ${formatSize(opus.size)}`, 'success');
+      } catch (e) {
+        console.warn('[Zapfire] convertToOggOpus falhou:', e);
+        // ANTIGO comportamento: salvava MP3 cru e mentia o mimetype
+        // → iPhone do destinatário recebia "Este áudio não está mais
+        // disponível". Agora: aborta o save, força usuário a tentar
+        // outro arquivo. Sem fallback silencioso.
+        draft.content = null;
+        draft.mimeType = null;
+        draft.size = null;
+        draft.duration = null;
+        draft.pttCompat = null;
+        const msg = e && e.message ? e.message : 'erro desconhecido';
+        toast(`Não consegui converter esse áudio (${msg}). Tente outro arquivo ou já em OGG Opus.`, 'error');
+      } finally {
+        setDropzoneLoading(false);
+      }
     }
   } else {
     draft.content = file;
     draft.mimeType = file.type;
     draft.size = file.size;
 
-    if (draft.type === 'audio' || draft.type === 'video') {
-      draft.duration = await getMediaDuration(file, draft.type);
-    }
     if (draft.type === 'video') {
+      draft.duration = await getMediaDuration(file, draft.type);
       draft.thumbnail = await generateVideoThumbnail(file);
     }
     if (draft.type === 'image') {
@@ -1389,15 +1421,36 @@ function setDropzoneLoading(loading) {
 }
 
 // ------------------------------------------------------------
-// Conversão pra OGG Opus (WA PTT format)
+// Conversão pra OGG Opus (WA PTT format canonical)
 // ------------------------------------------------------------
-// Usa opus-media-recorder (UMD carregado no manager.html) que é
-// um polyfill de MediaRecorder com saída OGG real. Tempo de
-// conversão ≈ duração do áudio (playback realtime).
+// Output garantido: 16kHz mono Opus, mimetype 'audio/ogg; codecs=opus'.
+// Esses params batem com o que o WA grava nativo no app (VOIP profile)
+// e são requeridos pra que iPhone aceite o PTT sem erro "não disponível".
+//
+// Robustez (0.4.5):
+//   - AudioContext criado com sampleRate explícito (16000 Hz) — antes
+//     herdava sampleRate do device (44.1kHz/48kHz), gerando arquivos
+//     3-4× maiores e fora da spec do WA.
+//   - MediaStreamDestination forçado a channelCount=1 (mono) — antes
+//     herdava channels do source, gerando stereo. iPhone rejeita.
+//   - Promise.race com timeout (duration*1.5 + 5s) — antes podia hangar
+//     forever se source.onended ou recorder.onstop não disparassem
+//     (autoplay policy suspendendo ctx, WASM falhando silencioso).
+//   - decodeAudioData também com timeout — arquivos corrompidos não
+//     travam o flow inteiro.
+//   - try/finally em ctx.close() — sem leak de AudioContext em paths
+//     de erro (Chrome cap 6 contexts/aba, após cap todos PTTs falham
+//     silenciosamente).
 // ------------------------------------------------------------
-function isOggOpus(blob) {
-  const t = (blob.type || '').toLowerCase();
-  return t.includes('ogg') && t.includes('opus');
+
+function decodeAudioDataWithTimeout(ctx, arrayBuf, timeoutMs = 30_000) {
+  return Promise.race([
+    ctx.decodeAudioData(arrayBuf),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('decodeAudioData timeout (arquivo corrompido?)')),
+      timeoutMs,
+    )),
+  ]);
 }
 
 async function convertToOggOpus(blob) {
@@ -1408,49 +1461,94 @@ async function convertToOggOpus(blob) {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) throw new Error('AudioContext indisponível');
 
-  const ctx = new AC();
-  const arrayBuf = await blob.arrayBuffer();
-  const audioBuf = await ctx.decodeAudioData(arrayBuf);
+  // Sample rate explícito 16kHz — decodeAudioData resampleia
+  // automaticamente qualquer input pra esse rate.
+  let ctx;
+  try {
+    ctx = new AC({ sampleRate: PTT_SAMPLE_RATE });
+  } catch (_) {
+    // Fallback: alguns browsers antigos não aceitam sampleRate no
+    // constructor. Tenta sem (vai sair em rate device default).
+    ctx = new AC();
+  }
 
-  // MediaStream sem output de áudio (não toca no speaker)
-  const dest = ctx.createMediaStreamDestination();
-  const source = ctx.createBufferSource();
-  source.buffer = audioBuf;
-  source.connect(dest);
+  let recorder = null;
+  let timeoutTimer = null;
+  let audioBuf;
 
-  // Worker + WASM paths via chrome.runtime.getURL (extension origin)
-  const workerOptions = {
-    encoderWorkerFactory: () => new Worker(chrome.runtime.getURL('vendor/opus/encoderWorker.umd.js')),
-    OggOpusEncoderWasmPath: chrome.runtime.getURL('vendor/opus/OggOpusEncoder.wasm'),
-    WebMOpusEncoderWasmPath: chrome.runtime.getURL('vendor/opus/WebMOpusEncoder.wasm'),
-  };
+  try {
+    const arrayBuf = await blob.arrayBuffer();
+    audioBuf = await decodeAudioDataWithTimeout(ctx, arrayBuf, 30_000);
 
-  const recorder = new OpusMediaRecorder(
-    dest.stream,
-    { mimeType: 'audio/ogg;codecs=opus', audioBitsPerSecond: 32000 },
-    workerOptions
-  );
+    // Destination mono explícito — downmix automático se source for stereo
+    const dest = ctx.createMediaStreamDestination();
+    try {
+      dest.channelCount = PTT_CHANNELS;
+      dest.channelCountMode = 'explicit';
+      dest.channelInterpretation = 'speakers';
+    } catch (_) {
+      // Alguns browsers não permitem set após criação — ignora,
+      // sample rate do ctx já força conversão
+    }
 
-  const chunks = [];
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuf;
+    source.connect(dest);
 
-  return new Promise((resolve, reject) => {
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-    recorder.onerror = (e) => reject(e.error || new Error('recorder error'));
-    recorder.onstop = () => {
-      try { ctx.close(); } catch (_) {}
-      if (!chunks.length) return reject(new Error('sem chunks'));
-      resolve(new Blob(chunks, { type: 'audio/ogg;codecs=opus' }));
+    const workerOptions = {
+      encoderWorkerFactory: () => new Worker(chrome.runtime.getURL('vendor/opus/encoderWorker.umd.js')),
+      OggOpusEncoderWasmPath: chrome.runtime.getURL('vendor/opus/OggOpusEncoder.wasm'),
+      WebMOpusEncoderWasmPath: chrome.runtime.getURL('vendor/opus/WebMOpusEncoder.wasm'),
     };
 
-    source.onended = () => {
-      setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop();
-      }, 200);
-    };
+    recorder = new OpusMediaRecorder(
+      dest.stream,
+      { mimeType: PTT_MIME, audioBitsPerSecond: PTT_BITRATE },
+      workerOptions,
+    );
 
-    recorder.start();
-    source.start();
-  });
+    const chunks = [];
+
+    const recorderPromise = new Promise((resolve, reject) => {
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onerror = (e) => reject(e.error || new Error('recorder error'));
+      recorder.onstop = () => {
+        if (!chunks.length) return reject(new Error('encoder sem chunks'));
+        resolve(new Blob(chunks, { type: PTT_MIME }));
+      };
+
+      source.onended = () => {
+        setTimeout(() => {
+          if (recorder.state === 'recording') {
+            try { recorder.stop(); } catch (_) {}
+          }
+        }, 200);
+      };
+
+      recorder.start();
+      source.start();
+    });
+
+    // Timeout de safety: (duração * 1.5) + 5s. Cobre playback realtime
+    // + overhead do encoder com folga. Mínimo de 10s pra áudios curtos
+    // não terem timeout apertado.
+    const timeoutMs = Math.max(10_000, Math.floor(audioBuf.duration * 1500) + 5_000);
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        reject(new Error(`Conversão travou após ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    });
+
+    return await Promise.race([recorderPromise, timeoutPromise]);
+  } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    if (recorder && recorder.state === 'recording') {
+      try { recorder.stop(); } catch (_) {}
+    }
+    try { ctx.close(); } catch (_) {}
+  }
 }
 
 async function saveItemFromModal(event) {
@@ -2305,7 +2403,214 @@ function updateCreateButton() {
   btn.textContent = label;
 }
 
+// ============================================================
+// Header alerts (0.4.5) — banners não-modais no topo
+// ============================================================
+// Sistema simples de alertas no header pra: (1) avisar quando storage
+// não tá protegido, (2) oferecer batch reconvert de áudios legacy.
+// Cada alert tem um id pra ser atualizado/removido sem repintar tudo.
+
+function alertsContainer() {
+  return $('header-alerts');
+}
+
+function renderAlert(id, html) {
+  const root = alertsContainer();
+  if (!root) return;
+  let el = document.getElementById(`alert-${id}`);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = `alert-${id}`;
+    root.appendChild(el);
+  }
+  el.innerHTML = html;
+  root.hidden = false;
+}
+
+function removeAlert(id) {
+  const el = document.getElementById(`alert-${id}`);
+  if (el) el.remove();
+  const root = alertsContainer();
+  if (root && root.children.length === 0) root.hidden = true;
+}
+
+// Verifica saúde do storage e mostra banner se não protegido.
+// Idempotente — pode chamar várias vezes sem efeito colateral.
+async function checkStorageHealth() {
+  try {
+    const granted = await storage.requestPersistentStorage();
+
+    // Estimativa de uso vs quota — banner se passar de 80%
+    let usagePct = null;
+    if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+      try {
+        const est = await navigator.storage.estimate();
+        if (est.quota && est.usage) {
+          usagePct = (est.usage / est.quota) * 100;
+        }
+      } catch (_) {}
+    }
+
+    if (granted) {
+      removeAlert('storage');
+    } else {
+      renderAlert('storage', `
+        <div class="alert alert-warning">
+          <svg class="alert-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div class="alert-body">
+            <div class="alert-title">Storage do navegador não está protegido</div>
+            <div class="alert-sub">Seu navegador pode apagar sua biblioteca sob pressão de espaço. <strong>Exporte um backup pelo menos uma vez por semana</strong> pra não perder seus áudios e funis.</div>
+          </div>
+        </div>
+      `);
+    }
+
+    if (usagePct !== null && usagePct > 80) {
+      renderAlert('quota', `
+        <div class="alert alert-warning">
+          <svg class="alert-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <div class="alert-body">
+            <div class="alert-title">Storage quase cheio (${Math.round(usagePct)}%)</div>
+            <div class="alert-sub">Considere remover áudios e mídias que você não usa mais. Storage cheio aumenta risco de o navegador apagar tudo de uma vez.</div>
+          </div>
+        </div>
+      `);
+    } else {
+      removeAlert('quota');
+    }
+  } catch (e) {
+    console.warn('[Zapfire] checkStorageHealth falhou:', e);
+  }
+}
+
+// Conta áudios legacy e mostra banner azul oferecendo "Atualizar"
+// Click → roda batch reconvert atualizando progresso no próprio banner.
+let reconvertAbort = null;
+async function checkLegacyAudios() {
+  try {
+    const count = await countLegacyAudios();
+    if (count === 0) {
+      removeAlert('reconvert');
+      return;
+    }
+    renderAlert('reconvert', `
+      <div class="alert alert-info">
+        <svg class="alert-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <div class="alert-body">
+          <div class="alert-title">Atualização disponível pra ${count} áudio${count === 1 ? '' : 's'}</div>
+          <div class="alert-sub">Melhora a compatibilidade dos seus áudios com iPhone e dispositivos antigos. <strong>Não precisa reuploadar nada.</strong> Pode levar alguns minutos — pode fechar a aba e voltar depois, retoma de onde parou.</div>
+        </div>
+        <button class="alert-action" id="btn-start-reconvert">Atualizar agora</button>
+      </div>
+    `);
+
+    const btn = $('btn-start-reconvert');
+    if (btn) {
+      btn.addEventListener('click', startReconvert, { once: true });
+    }
+  } catch (e) {
+    console.warn('[Zapfire] checkLegacyAudios falhou:', e);
+  }
+}
+
+async function startReconvert() {
+  reconvertAbort = new AbortController();
+  let lastEmittedAt = 0;
+
+  // Substitui o banner pelo modo "em progresso"
+  const renderProgress = ({ done, total, current, status }) => {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const statusText = status === 'converting' && current
+      ? `Convertendo: ${current}`
+      : status === 'finished'
+        ? 'Concluído'
+        : status === 'aborted'
+          ? 'Cancelado'
+          : 'Processando...';
+    renderAlert('reconvert', `
+      <div class="alert alert-info">
+        <svg class="alert-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <div class="alert-body">
+          <div class="alert-title">Atualizando biblioteca (${done}/${total})</div>
+          <div class="alert-sub">${statusText}</div>
+          <div class="alert-progress">
+            <div class="alert-progress-bar">
+              <div class="alert-progress-fill" style="width:${pct}%"></div>
+            </div>
+            <div class="alert-progress-text">${pct}%</div>
+          </div>
+        </div>
+        <button class="alert-action" id="btn-cancel-reconvert">Cancelar</button>
+      </div>
+    `);
+    const cancel = $('btn-cancel-reconvert');
+    if (cancel) {
+      cancel.addEventListener('click', () => {
+        if (reconvertAbort) reconvertAbort.abort();
+      }, { once: true });
+    }
+  };
+
+  renderProgress({ done: 0, total: 0, current: null, status: 'starting' });
+
+  try {
+    const result = await reconvertLegacyAudios({
+      converter: convertToOggOpus,
+      signal: reconvertAbort.signal,
+      onProgress: (info) => {
+        // Throttle render a 200ms pra não congestionar
+        const now = Date.now();
+        if (now - lastEmittedAt > 150 || info.status === 'finished' || info.status === 'aborted') {
+          lastEmittedAt = now;
+          renderProgress(info);
+        }
+      },
+    });
+
+    if (result.aborted) {
+      toast('Atualização cancelada — você pode retomar quando quiser', 'warning');
+    } else {
+      const parts = [];
+      if (result.converted) parts.push(`${result.converted} convertido${result.converted === 1 ? '' : 's'}`);
+      if (result.failed) parts.push(`${result.failed} falhou`);
+      if (result.skipped) parts.push(`${result.skipped} sem conteúdo`);
+      toast(`✓ Biblioteca atualizada (${parts.join(', ')})`, result.failed > 0 ? 'warning' : 'success');
+    }
+
+    // Reverifica — se ainda tem legacy (falhas), banner volta com count restante
+    await checkLegacyAudios();
+    renderList();
+  } catch (e) {
+    console.warn('[Zapfire] reconvert falhou:', e);
+    toast(`Erro durante atualização: ${e.message || e}`, 'error');
+    await checkLegacyAudios();
+  } finally {
+    reconvertAbort = null;
+  }
+}
+
 function init() {
+  // 0.4.5 — Storage health check + offerta de batch reconvert dos
+  // áudios legacy. Async, não bloqueia o resto do init.
+  checkStorageHealth();
+  checkLegacyAudios();
+
   // Filtros
   document.querySelectorAll('.filter-item').forEach((btn) => {
     btn.addEventListener('click', () => setActiveFilter(btn.dataset.filter));

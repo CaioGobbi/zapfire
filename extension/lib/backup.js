@@ -47,6 +47,7 @@ import {
   putFunnel,
   withItemDefaults,
 } from './storage.js';
+import { PTT_MIME } from './audio-config.js';
 
 export const SCHEMA_VERSION = '3.0.0';
 
@@ -436,7 +437,22 @@ export async function importBackup(input, options = {}) {
         report.skipped.audios++;
         continue;
       }
-      const blob = await dataUriToBlob(obj.data);
+      let blob = await dataUriToBlob(obj.data);
+      // Backups antigos (ZapVoice) vêm como 'audio/ogg' puro sem codec,
+      // ou variantes esquisitas ('audio/ogg+opus', 'audio/ogg;codec=opus'
+      // — typo). WhatsApp rejeita PTT sem 'codecs=opus' canonical.
+      // Re-envelopa forçando o mimetype correto; bytes binários OggS
+      // seguem válidos. NÃO seta pttCompat=1 — encoding pode estar
+      // a 48kHz stereo (ZapVoice nativo), o batch reconvert do manager
+      // vai padronizar pra 16kHz mono na próxima abertura.
+      const isPttItem = (typeof obj.isPtt === 'boolean' ? obj.isPtt : (meta.isPtt ?? true));
+      const blobType = (blob.type || '').toLowerCase();
+      const needsRewrap = isPttItem
+        && blobType.includes('ogg')
+        && !(blobType.includes('codecs=opus'));
+      if (needsRewrap) {
+        blob = new Blob([blob], { type: PTT_MIME });
+      }
       const newId = pickId(meta.id, regenerateIds, idMap);
       const duration = await readBlobDuration(blob, 'audio');
       const item = {
@@ -444,7 +460,7 @@ export async function importBackup(input, options = {}) {
         type: 'audio',
         title: meta.name || 'Áudio',
         content: blob,
-        mimeType: blob.type || 'audio/ogg',
+        mimeType: blob.type || PTT_MIME,
         size: blob.size,
         duration,
         createdAt: nextItemCreatedAt(),

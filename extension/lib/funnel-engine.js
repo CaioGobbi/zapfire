@@ -147,7 +147,12 @@ export function runFunnel(funnelId, opts = {}) {
 
       if (result?.ok) {
         completed++;
-        await incrementItemUses(item.id);
+        // incrementItemUses pode lançar se IndexedDB tiver problema
+        // (quota cheia, schema upgrade). Sem try/catch o throw escapa
+        // do for, activeRuns.delete não roda, onRunFinish não dispara,
+        // run fica zumbi. Contador de uses não é crítico — se perder
+        // 1 contagem, ok. O importante é o flow continuar até o final.
+        try { await incrementItemUses(item.id); } catch (_) {}
         emit({ phase: 'sent', current: i + 1, total, item });
         safeHook(onStepComplete, {
           runId,
