@@ -818,7 +818,7 @@ O Melfi opera outros produtos que compartilham infra quando faz sentido:
 ### WA-JS (`vendor/wppconnect-wa.js`)
 - Licença: MIT
 - Repo: https://github.com/wppconnect-team/wa-js
-- Versão testada: 3.23.4
+- Versão testada: 4.7.1 (3.23.4 quebra o envio, até o digitado à mão, no WA Web de out/2026)
 - Uso: Store hijacking do WA Web. Expõe `window.WPP` com APIs `chat.sendFileMessage`, `chat.sendVoiceMessage`, `chat.getActiveChat`
 - **Risco**: atualizações do WA Web podem quebrar. Monitorar 1-2x por mês. Atualizar o bundle quando quebrar
 

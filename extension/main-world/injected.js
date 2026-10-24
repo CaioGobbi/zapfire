@@ -387,28 +387,32 @@
     return out;
   }
 
-  // Espera o WA confirmar que a mensagem saiu (upload terminado +
-  // servidor recebeu). WA-JS devolve sendMsgResult como Promise
-  // mesmo com waitForAck:false. Timeout curto pra não estourar os
-  // 60s do callInjectedApi — se passar disso, a mensagem já está na
-  // fila do WA e vai sair sozinha; não reportamos erro pra não
-  // gerar reenvio duplicado.
-  async function waitSendResult(result, timeoutMs = 40_000) {
-    const pending = result?.sendMsgResult;
-    if (!pending || typeof pending.then !== 'function') return { status: 'unknown' };
+  // Envia via WPP.chat.sendFileMessage com waitForAck:true e espera
+  // o WA confirmar que a mensagem saiu (upload terminado + servidor
+  // recebeu). No WA-JS 4.x, com waitForAck:false o sendMsgResult vem
+  // null, então a espera tem que ser pelo próprio WA-JS. Timeout
+  // nosso de 40s pra não estourar os 60s do callInjectedApi — se
+  // passar disso, a mensagem já está na fila do WA e vai sair
+  // sozinha; não reportamos erro pra não gerar reenvio duplicado.
+  async function sendFileAndWait(jid, file, opts, timeoutMs = 40_000) {
+    const sending = window.WPP.chat.sendFileMessage(jid, file, { ...opts, waitForAck: true });
     let timer;
     try {
       const r = await Promise.race([
-        pending,
+        sending,
         new Promise((resolve) => { timer = setTimeout(() => resolve('__timeout__'), timeoutMs); }),
       ]);
-      if (r === '__timeout__') return { status: 'pending' };
-      // Formato do resolve varia entre versões do WA; só trata como
-      // falha quando o WA devolve explicitamente um código ERROR_*.
-      const code = r?.messageSendResult ?? (typeof r === 'string' ? r : undefined);
-      return { status: code && /ERROR/i.test(String(code)) ? 'failed' : 'ok', code };
+      if (r === '__timeout__') {
+        sending.catch((e) => console.warn(LOG, 'envio terminou com erro após timeout:', e?.message || e));
+        return { result: null, status: 'pending' };
+      }
+      // Formato do sendMsgResult varia entre versões do WA; só trata
+      // como falha quando o WA devolve explicitamente um ERROR_*.
+      const sr = r?.sendMsgResult;
+      const code = sr?.messageSendResult ?? (typeof sr === 'string' ? sr : undefined);
+      return { result: r, status: code && /ERROR/i.test(String(code)) ? 'failed' : 'ok', code };
     } catch (e) {
-      return { status: 'failed', code: e?.message || String(e) };
+      return { result: null, status: 'failed', code: e?.message || String(e) };
     } finally {
       clearTimeout(timer);
     }
@@ -443,14 +447,13 @@
         console.warn(LOG, `PTT recebeu bytes ${sniff.kind} (type declarado: ${blob.type}) — enviando como áudio comum. Rode "Atualizar biblioteca" no gerenciador pra converter.`);
         const mime = sniff.mime || blob.type || 'audio/mpeg';
         const file = new File([u8], fname, { type: mime });
-        const result = await window.WPP.chat.sendFileMessage(targetJid, file, {
+        const sent = await sendFileAndWait(targetJid, file, {
           type: 'audio',
           isPtt: false,
           filename: fname,
           mimetype: mime,
-          waitForAck: false,
         });
-        const sent = await waitSendResult(result);
+        const result = sent.result;
         if (sent.status === 'failed') {
           return { ok: false, error: `WhatsApp recusou o áudio (${sent.code})`, id: result?.id };
         }
@@ -469,7 +472,7 @@
         uniquified: !!unique,
       });
 
-      const result = await window.WPP.chat.sendFileMessage(targetJid, fileForSend, {
+      const sent = await sendFileAndWait(targetJid, fileForSend, {
         type: 'audio',
         isPtt: true,
         filename: fileForSend.name,
@@ -477,13 +480,11 @@
         // true = WA-JS decodifica e preenche duration + waveform
         // (precomputedFields). Array aqui é ignorado pelo WA-JS 4.x.
         waveform: true,
-        // Não bloqueia no ack dentro do WA-JS; esperamos nós mesmos
-        // com timeout em waitSendResult. Isso também garante que o
-        // próximo passo do funil (ex: texto) só sai DEPOIS do áudio
-        // terminar o upload — antes o texto chegava antes do áudio.
-        waitForAck: false,
       });
-      const sent = await waitSendResult(result);
+      // Esperar o ack (sendFileAndWait) também garante que o próximo
+      // passo do funil (ex: texto) só sai DEPOIS do áudio terminar o
+      // upload — antes o texto chegava antes do áudio.
+      const result = sent.result;
       console.log(LOG, 'PTT', result?.id, 'status:', sent.status, sent.code ?? '');
       if (sent.status === 'failed') {
         return { ok: false, error: `WhatsApp recusou o áudio (${sent.code})`, id: result?.id };
