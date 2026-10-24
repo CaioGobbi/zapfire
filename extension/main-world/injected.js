@@ -153,61 +153,273 @@
   }
 
   // ----------------------------------------------------------
-  // Waveform — pré-calcula amplitudes pra PTT ter visual igual
-  // ao do WA nativo (gravado pelo microfone dentro do app).
-  // WA usa array de 64 bytes, cada um 0-100% da amplitude max.
+  // PTT — preparação dos bytes OGG/Opus antes do envio
   // ----------------------------------------------------------
-  async function computeWaveform(blob) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    // Chrome limita ~6 AudioContexts simultâneos por aba. O catch
-    // antigo deixava ctx vazado em qualquer falha de decodeAudioData
-    // (áudio importado mal-encodado, MP3 com mimetype mentiroso) — após
-    // ~6 falhas, todo PTT subsequente saía com waveform=null silencioso,
-    // gatilho invisível pro iPhone rejeitar como "não disponível".
-    // try/finally garante close em todos os paths.
-    let ctx = null;
-    try {
-      ctx = new AC();
-      const arrayBuf = await blob.arrayBuffer();
-      const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
-      const samples = audioBuf.getChannelData(0);
+  // Três causas de "áudio não disponível" no celular do destinatário
+  // que esse bloco ataca:
+  //
+  // 1. Reuso de mídia por hash. O WA Web identifica mídia pelo
+  //    SHA-256 dos bytes (filehash). Funil manda o MESMO arquivo pra
+  //    dezenas de contatos, então o WA reaproveita um upload antigo
+  //    (mesmo directPath/mediaKey) em vez de subir de novo. Quando
+  //    esse upload expira no CDN, o destinatário não baixa e pede
+  //    reenvio pro remetente — que geralmente falha. Resultado:
+  //    "Este áudio não está disponível". Solução: cada envio ganha
+  //    bytes únicos (um comentário ZFID=<random> no header OpusTags,
+  //    CRC recalculado). O áudio em si não muda nem 1 sample.
+  //
+  // 2. Bytes que não são Opus mandados como PTT. Itens antigos da
+  //    biblioteca (antes da 0.4.5) ou backups importados podem ser
+  //    MP3/WAV com mimetype ogg. Android/iOS só tocam PTT em Opus.
+  //    Se o sniff falhar, manda como áudio comum (anexo) com o
+  //    mimetype real — toca em qualquer celular.
+  //
+  // 3. Pacote Opus vazio no fim do arquivo (ver stripEmptyOggPackets).
+  //
+  // 4. Duração/waveform ausentes. O WA-JS 4.x só calcula
+  //    duration+waveform (precomputedFields) se options.waveform for
+  //    truthy. Antes a gente passava `undefined` quando o nosso
+  //    decode falhava, e o PTT saía sem duração (0:00) — o iPhone
+  //    rejeita. Agora sempre passa `waveform: true`.
+  // ----------------------------------------------------------
 
-      const BARS = 64;
-      const step = Math.max(1, Math.floor(samples.length / BARS));
-      const waveform = new Uint8Array(BARS);
+  // CRC-32 do Ogg: polinômio 0x04c11db7, sem reflexão, init 0.
+  const OGG_CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let r = i << 24;
+      for (let j = 0; j < 8; j++) {
+        r = (r & 0x80000000) ? ((r << 1) ^ 0x04c11db7) : (r << 1);
+      }
+      t[i] = r >>> 0;
+    }
+    return t;
+  })();
 
-      const rmsBuckets = new Float32Array(BARS);
-      let maxRms = 0;
-      for (let i = 0; i < BARS; i++) {
-        const start = i * step;
-        const end = Math.min(start + step, samples.length);
-        let sumSq = 0;
-        for (let j = start; j < end; j++) {
-          sumSq += samples[j] * samples[j];
+  function oggCrc(bytes) {
+    let crc = 0;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = ((crc << 8) ^ OGG_CRC_TABLE[((crc >>> 24) ^ bytes[i]) & 0xff]) >>> 0;
+    }
+    return crc;
+  }
+
+  const ascii = (u8, off, str) => {
+    for (let i = 0; i < str.length; i++) {
+      if (u8[off + i] !== str.charCodeAt(i)) return false;
+    }
+    return true;
+  };
+
+  // Lê uma página Ogg em `off`. Retorna null se não for página válida.
+  function readOggPage(u8, off) {
+    if (off + 27 > u8.length || !ascii(u8, off, 'OggS')) return null;
+    const nseg = u8[off + 26];
+    const lacingEnd = off + 27 + nseg;
+    if (lacingEnd > u8.length) return null;
+    let bodyLen = 0;
+    for (let i = off + 27; i < lacingEnd; i++) bodyLen += u8[i];
+    const end = lacingEnd + bodyLen;
+    if (end > u8.length) return null;
+    return {
+      off, nseg, bodyStart: lacingEnd, end,
+      lastLacing: nseg ? u8[lacingEnd - 1] : 0,
+    };
+  }
+
+  // Detecta o formato real pelos magic bytes (mimetype pode mentir).
+  function sniffAudio(u8) {
+    if (ascii(u8, 0, 'OggS')) {
+      const p = readOggPage(u8, 0);
+      if (p && ascii(u8, p.bodyStart, 'OpusHead')) return { kind: 'ogg-opus' };
+      return { kind: 'ogg-other', mime: 'audio/ogg' };
+    }
+    if (ascii(u8, 0, 'ID3') || (u8[0] === 0xff && (u8[1] & 0xe0) === 0xe0)) {
+      return { kind: 'mp3', mime: 'audio/mpeg' };
+    }
+    if (ascii(u8, 0, 'RIFF')) return { kind: 'wav', mime: 'audio/wav' };
+    if (ascii(u8, 4, 'ftyp')) return { kind: 'mp4', mime: 'audio/mp4' };
+    if (u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3) {
+      return { kind: 'webm', mime: 'audio/webm' };
+    }
+    return { kind: 'unknown', mime: null };
+  }
+
+  // Recalcula e grava o CRC de uma página Ogg (bytes 22..25).
+  function writeOggCrc(page) {
+    page[22] = page[23] = page[24] = page[25] = 0;
+    const crc = oggCrc(page);
+    page[22] = crc & 0xff;
+    page[23] = (crc >>> 8) & 0xff;
+    page[24] = (crc >>> 16) & 0xff;
+    page[25] = (crc >>> 24) & 0xff;
+  }
+
+  // Remove pacotes de 0 bytes das páginas de áudio. O
+  // opus-media-recorder (usado no convertToOggOpus do manager) fecha
+  // o arquivo com um pacote vazio na página EOS. Pacote Opus de 0
+  // bytes é inválido (RFC 6716 §3.1 exige pelo menos o byte TOC):
+  // ffmpeg acusa "Invalid data found when processing input" e os
+  // decoders estritos dos apps do WhatsApp podem recusar o arquivo
+  // inteiro. Todo áudio convertido pelo Zapfire tem isso — aqui
+  // limpa na hora do envio, então itens já salvos também são
+  // corrigidos sem precisar reconverter.
+  // Retorna { bytes, removed }.
+  function stripEmptyOggPackets(u8) {
+    const parts = [];
+    let removed = 0;
+    let off = 0;
+    while (off < u8.length) {
+      const pg = readOggPage(u8, off);
+      if (!pg) {
+        // Lixo no fim do arquivo: descarta (não é página válida).
+        break;
+      }
+      const lacing = u8.subarray(off + 27, pg.bodyStart);
+      const continued = (u8[off + 5] & 0x01) !== 0;
+      const keep = [];
+      let inPacket = continued;
+      let pktLen = 0;
+      for (let i = 0; i < lacing.length; i++) {
+        const v = lacing[i];
+        const startsPacket = !inPacket;
+        pktLen += v;
+        if (v < 255) {
+          // Pacote termina aqui. Se começou nesta lacing e tem 0
+          // bytes, é o pacote vazio — não copia.
+          if (startsPacket && pktLen === 0) {
+            removed++;
+          } else {
+            keep.push(v);
+          }
+          inPacket = false;
+          pktLen = 0;
+        } else {
+          keep.push(v);
+          inPacket = true;
         }
-        const rms = Math.sqrt(sumSq / Math.max(1, end - start));
-        rmsBuckets[i] = rms;
-        if (rms > maxRms) maxRms = rms;
       }
-      const norm = maxRms > 0 ? 100 / maxRms : 1;
-      for (let i = 0; i < BARS; i++) {
-        waveform[i] = Math.min(100, Math.round(rmsBuckets[i] * norm));
+      if (keep.length === lacing.length) {
+        parts.push(u8.subarray(off, pg.end));
+      } else {
+        const body = u8.subarray(pg.bodyStart, pg.end);
+        const page = new Uint8Array(27 + keep.length + body.length);
+        page.set(u8.subarray(off, off + 26), 0);
+        page[26] = keep.length;
+        page.set(keep, 27);
+        page.set(body, 27 + keep.length);
+        writeOggCrc(page);
+        parts.push(page);
       }
+      off = pg.end;
+    }
+    if (!removed && off === u8.length) return { bytes: u8, removed: 0 };
+    let total = 0;
+    for (const p of parts) total += p.length;
+    const out = new Uint8Array(total);
+    let q = 0;
+    for (const p of parts) { out.set(p, q); q += p.length; }
+    return { bytes: out, removed };
+  }
 
-      return waveform;
-    } catch (e) {
-      console.warn(LOG, 'waveform compute failed:', e.message);
-      return null;
-    } finally {
-      if (ctx) {
-        try { ctx.close(); } catch (_) {}
+  // Reescreve a página OpusTags com um comentário ZFID único.
+  // Retorna Uint8Array novo, ou null se a estrutura não for a
+  // esperada (aí o chamador manda os bytes originais).
+  function uniquifyOggOpus(u8) {
+    const head = readOggPage(u8, 0);
+    if (!head) return null;
+    const tags = readOggPage(u8, head.end);
+    if (!tags || !ascii(u8, tags.bodyStart, 'OpusTags')) return null;
+    // OpusTags precisa caber inteiro nesta página (caso normal).
+    // Tags gigantes (capa de álbum etc.) atravessam páginas — não mexe.
+    if (tags.lastLacing === 255) return null;
+
+    const body = u8.subarray(tags.bodyStart, tags.end);
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    let p = 8;
+    const vendorLen = dv.getUint32(p, true); p += 4;
+    if (p + vendorLen + 4 > body.length) return null;
+    const vendor = body.subarray(p, p + vendorLen); p += vendorLen;
+    const count = dv.getUint32(p, true); p += 4;
+    const dec = new TextDecoder();
+    const enc = new TextEncoder();
+    const comments = [];
+    for (let i = 0; i < count; i++) {
+      if (p + 4 > body.length) return null;
+      const len = dv.getUint32(p, true); p += 4;
+      if (p + len > body.length) return null;
+      const c = body.subarray(p, p + len); p += len;
+      if (!dec.decode(c).toUpperCase().startsWith('ZFID=')) comments.push(c);
+    }
+    const rnd = crypto.getRandomValues(new Uint8Array(8));
+    const id = Array.from(rnd, (b) => b.toString(16).padStart(2, '0')).join('');
+    comments.push(enc.encode(`ZFID=${id}`));
+
+    let newLen = 8 + 4 + vendor.length + 4;
+    for (const c of comments) newLen += 4 + c.length;
+    const lacingCount = Math.floor(newLen / 255) + 1;
+    if (lacingCount > 255) return null;
+
+    const newBody = new Uint8Array(newLen);
+    const nb = new DataView(newBody.buffer);
+    newBody.set(body.subarray(0, 8), 0);
+    let q = 8;
+    nb.setUint32(q, vendor.length, true); q += 4;
+    newBody.set(vendor, q); q += vendor.length;
+    nb.setUint32(q, comments.length, true); q += 4;
+    for (const c of comments) {
+      nb.setUint32(q, c.length, true); q += 4;
+      newBody.set(c, q); q += c.length;
+    }
+
+    const page = new Uint8Array(27 + lacingCount + newLen);
+    page.set(u8.subarray(tags.off, tags.off + 26), 0);
+    page[26] = lacingCount;
+    for (let i = 0; i < lacingCount - 1; i++) page[27 + i] = 255;
+    page[27 + lacingCount - 1] = newLen % 255;
+    page.set(newBody, 27 + lacingCount);
+    writeOggCrc(page);
+
+    const out = new Uint8Array(tags.off + page.length + (u8.length - tags.end));
+    out.set(u8.subarray(0, tags.off), 0);
+    out.set(page, tags.off);
+    out.set(u8.subarray(tags.end), tags.off + page.length);
+    return out;
+  }
+
+  // Envia via WPP.chat.sendFileMessage com waitForAck:true e espera
+  // o WA confirmar que a mensagem saiu (upload terminado + servidor
+  // recebeu). No WA-JS 4.x, com waitForAck:false o sendMsgResult vem
+  // null, então a espera tem que ser pelo próprio WA-JS. Timeout
+  // nosso de 40s pra não estourar os 60s do callInjectedApi — se
+  // passar disso, a mensagem já está na fila do WA e vai sair
+  // sozinha; não reportamos erro pra não gerar reenvio duplicado.
+  async function sendFileAndWait(jid, file, opts, timeoutMs = 40_000) {
+    const sending = window.WPP.chat.sendFileMessage(jid, file, { ...opts, waitForAck: true });
+    let timer;
+    try {
+      const r = await Promise.race([
+        sending,
+        new Promise((resolve) => { timer = setTimeout(() => resolve('__timeout__'), timeoutMs); }),
+      ]);
+      if (r === '__timeout__') {
+        sending.catch((e) => console.warn(LOG, 'envio terminou com erro após timeout:', e?.message || e));
+        return { result: null, status: 'pending' };
       }
+      // Formato do sendMsgResult varia entre versões do WA; só trata
+      // como falha quando o WA devolve explicitamente um ERROR_*.
+      const sr = r?.sendMsgResult;
+      const code = sr?.messageSendResult ?? (typeof sr === 'string' ? sr : undefined);
+      return { result: r, status: code && /ERROR/i.test(String(code)) ? 'failed' : 'ok', code };
+    } catch (e) {
+      return { result: null, status: 'failed', code: e?.message || String(e) };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   // ----------------------------------------------------------
-  // sendFile — via WPP.chat.sendFileMessage / sendVoiceMessage
+  // sendFile — via WPP.chat.sendFileMessage
   // ----------------------------------------------------------
   async function sendFile(jid, blob, { type = 'auto', caption = '', filename, isPtt = false } = {}) {
     if (!jid) throw new Error('jid obrigatório');
@@ -220,60 +432,64 @@
     const fname = filename || blob.name || `zapfire-${Date.now()}`;
 
     // PTT exige mimetype EXATO 'audio/ogg; codecs=opus' senão Android
-    // rejeita o codec — remetente não consegue ouvir, destinatário também
-    // não. Áudios importados do ZapVoice (backup 3.0.0) vêm como
-    // 'audio/ogg' puro, e File constructor herda esse type — daí o bug.
-    // Bytes binários já são OggS válidos, só precisa declarar o codec.
+    // rejeita o codec. Áudios importados do ZapVoice (backup 3.0.0)
+    // vêm como 'audio/ogg' puro — por isso o File é sempre recriado.
     const pttMime = 'audio/ogg; codecs=opus';
-    const effectiveType = isPtt ? pttMime : (blob.type || 'audio/mpeg');
 
-    // Normaliza pra File — o blob do IndexedDB vem como Blob puro
-    // (sem .name), WPP pode tratar diferente de um File legit.
-    const fileForSend = blob instanceof File && (!isPtt || blob.type === pttMime)
-      ? blob
-      : new File([blob], fname, { type: effectiveType });
-
-    // ---- PTT: usa sendVoiceMessage (helper especializado) + waveform ----
+    // ---- PTT ----
     if (isPtt) {
-      console.log(LOG, 'sendFile PTT — blob:', {
-        type: blob.type,
-        size: blob.size,
-        isFile: blob instanceof File,
-        fileName: fileForSend.name,
-      });
-      const waveform = await computeWaveform(blob);
-      console.log(LOG, 'waveform:', waveform
-        ? `Uint8Array [${Array.from(waveform).slice(0, 8).join(',')}...] (${waveform.length} bytes)`
-        : 'NULL (decode falhou)');
+      const u8 = new Uint8Array(await blob.arrayBuffer());
+      const sniff = sniffAudio(u8);
 
-      // sendVoiceMessage é o caminho preferido pra PTT.
-      // waitForAck:false — não pendura aguardando ack server-side
-      // (sendText na linha 144 já faz isso; PTT/file não fazia, era
-      // inconsistência não-documentada). Promise resolve no enqueue
-      // local. Falhas reais de server-side ficam invisíveis pro user
-      // até Sprint 9 implementar WPP.on('msg.ack') tracking.
-      if (typeof window.WPP.chat.sendVoiceMessage === 'function') {
-        try {
-          const result = await window.WPP.chat.sendVoiceMessage(targetJid, fileForSend, {
-            waveform: waveform || undefined,
-            waitForAck: false,
-          });
-          return { ok: true, id: result?.id?._serialized, ack: result?.ack, via: 'sendVoiceMessage', hadWaveform: !!waveform };
-        } catch (e) {
-          console.warn(LOG, 'sendVoiceMessage falhou, caindo em sendFileMessage:', e.message);
+      if (sniff.kind !== 'ogg-opus') {
+        // Não é Opus: mandar como PTT garante "áudio não disponível".
+        // Vai como anexo de áudio com o mimetype real.
+        console.warn(LOG, `PTT recebeu bytes ${sniff.kind} (type declarado: ${blob.type}) — enviando como áudio comum. Rode "Atualizar biblioteca" no gerenciador pra converter.`);
+        const mime = sniff.mime || blob.type || 'audio/mpeg';
+        const file = new File([u8], fname, { type: mime });
+        const sent = await sendFileAndWait(targetJid, file, {
+          type: 'audio',
+          isPtt: false,
+          filename: fname,
+          mimetype: mime,
+        });
+        const result = sent.result;
+        if (sent.status === 'failed') {
+          return { ok: false, error: `WhatsApp recusou o áudio (${sent.code})`, id: result?.id };
         }
+        return { ok: true, id: result?.id, ack: result?.ack, via: 'sendFileMessage-audio-fallback', degraded: `not-opus:${sniff.kind}`, sendStatus: sent.status };
       }
 
-      // Fallback: sendFileMessage com isPtt + waveform
-      const result = await window.WPP.chat.sendFileMessage(targetJid, fileForSend, {
+      const clean = stripEmptyOggPackets(u8);
+      const unique = uniquifyOggOpus(clean.bytes);
+      if (!unique) console.warn(LOG, 'OpusTags fora do padrão — enviando sem ZFID (pode reaproveitar upload antigo)');
+      const fileForSend = new File([unique || clean.bytes], fname.replace(/\.[^.]*$/, '') + '.ogg', { type: pttMime });
+
+      console.log(LOG, 'sendFile PTT —', {
+        declaredType: blob.type,
+        size: fileForSend.size,
+        emptyPacketsRemoved: clean.removed,
+        uniquified: !!unique,
+      });
+
+      const sent = await sendFileAndWait(targetJid, fileForSend, {
         type: 'audio',
         isPtt: true,
-        filename: fname,
+        filename: fileForSend.name,
         mimetype: pttMime,
-        waveform: waveform || undefined,
-        waitForAck: false,
+        // true = WA-JS decodifica e preenche duration + waveform
+        // (precomputedFields). Array aqui é ignorado pelo WA-JS 4.x.
+        waveform: true,
       });
-      return { ok: true, id: result?.id?._serialized, ack: result?.ack, via: 'sendFileMessage-ptt', hadWaveform: !!waveform };
+      // Esperar o ack (sendFileAndWait) também garante que o próximo
+      // passo do funil (ex: texto) só sai DEPOIS do áudio terminar o
+      // upload — antes o texto chegava antes do áudio.
+      const result = sent.result;
+      console.log(LOG, 'PTT', result?.id, 'status:', sent.status, sent.code ?? '');
+      if (sent.status === 'failed') {
+        return { ok: false, error: `WhatsApp recusou o áudio (${sent.code})`, id: result?.id };
+      }
+      return { ok: true, id: result?.id, ack: result?.ack, via: 'sendFileMessage-ptt', uniquified: !!unique, emptyPacketsRemoved: clean.removed, sendStatus: sent.status };
     }
 
     // ---- Mídia comum (image/video/document/audio) ----
